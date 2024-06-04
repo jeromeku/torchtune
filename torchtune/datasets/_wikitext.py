@@ -35,6 +35,10 @@ def wikitext_dataset(
     Returns:
         TextCompletionDataset: the configured TextCompletionDataset
     """
+    if "split" in load_dataset_kwargs:
+        split = load_dataset_kwargs.pop("split")
+    else:
+        split = "train"
 
     return TextCompletionDataset(
         tokenizer=tokenizer,
@@ -42,6 +46,6 @@ def wikitext_dataset(
         column="text",
         max_seq_len=max_seq_len,
         name=subset,
-        split="train",
+        split=split,
         **load_dataset_kwargs,
     )

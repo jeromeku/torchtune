@@ -202,61 +202,61 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             # log config with parameter override
             self._metric_logger.log_config(cfg)
 
-        # checkpoint_dict = self.load_checkpoint(cfg_checkpointer=cfg.checkpointer)
+        checkpoint_dict = self.load_checkpoint(cfg_checkpointer=cfg.checkpointer)
 
-        # self._model = self._setup_model(
-        #     cfg_model=cfg.model,
-        #     enable_activation_checkpointing=cfg.enable_activation_checkpointing,
-        #     base_model_state_dict=checkpoint_dict[utils.MODEL_KEY],
-        #     lora_weights_state_dict=(
-        #         checkpoint_dict[utils.ADAPTER_KEY]
-        #         if self._resume_from_checkpoint
-        #         else None
-        #     ),
-        # )
-        # self._tokenizer = config.instantiate(cfg.tokenizer)
+        self._model = self._setup_model(
+            cfg_model=cfg.model,
+            enable_activation_checkpointing=cfg.enable_activation_checkpointing,
+            base_model_state_dict=checkpoint_dict[utils.MODEL_KEY],
+            lora_weights_state_dict=(
+                checkpoint_dict[utils.ADAPTER_KEY]
+                if self._resume_from_checkpoint
+                else None
+            ),
+        )
+        self._tokenizer = config.instantiate(cfg.tokenizer)
 
-        # self._optimizer = self._setup_optimizer(
-        #     cfg_optimizer=cfg.optimizer,
-        #     opt_state_dict=checkpoint_dict[utils.OPT_KEY]
-        #     if self._resume_from_checkpoint
-        #     else None,
-        # )
+        self._optimizer = self._setup_optimizer(
+            cfg_optimizer=cfg.optimizer,
+            opt_state_dict=checkpoint_dict[utils.OPT_KEY]
+            if self._resume_from_checkpoint
+            else None,
+        )
 
-        # self._loss_fn = config.instantiate(cfg.loss)
+        self._loss_fn = config.instantiate(cfg.loss)
 
-        # # sampler and dataloader depend on the tokenizer and loss_fn and should be
-        # # setup after all of these are setup
-        # self._sampler, self._dataloader = self._setup_data(
-        #     cfg_dataset=cfg.dataset,
-        #     shuffle=cfg.shuffle,
-        #     batch_size=cfg.batch_size,
-        # )
+        # sampler and dataloader depend on the tokenizer and loss_fn and should be
+        # setup after all of these are setup
+        self._sampler, self._dataloader = self._setup_data(
+            cfg_dataset=cfg.dataset,
+            shuffle=cfg.shuffle,
+            batch_size=cfg.batch_size,
+        )
 
-        # # Finally update the recipe state which can only be correctly set after all of the
-        # # other components have been initialized and updated.
+        # Finally update the recipe state which can only be correctly set after all of the
+        # other components have been initialized and updated.
 
-        # # Number of training steps in each epoch depends on the number of batches produced
-        # # by the dataloader and the max_steps_per_epoch param set by the user and is used
-        # # for logging and tracking training state. This should be computed after the dataloader
-        # # has been setup
-        # self._steps_per_epoch = (
-        #     len(self._dataloader) // self._gradient_accumulation_steps
-        # )
-        # if (
-        #     self.max_steps_per_epoch is not None
-        #     and self.max_steps_per_epoch < self._steps_per_epoch
-        # ):
-        #     self._steps_per_epoch = self.max_steps_per_epoch
-        # self.global_step = self.epochs_run * self._steps_per_epoch
+        # Number of training steps in each epoch depends on the number of batches produced
+        # by the dataloader and the max_steps_per_epoch param set by the user and is used
+        # for logging and tracking training state. This should be computed after the dataloader
+        # has been setup
+        self._steps_per_epoch = (
+            len(self._dataloader) // self._gradient_accumulation_steps
+        )
+        if (
+            self.max_steps_per_epoch is not None
+            and self.max_steps_per_epoch < self._steps_per_epoch
+        ):
+            self._steps_per_epoch = self.max_steps_per_epoch
+        self.global_step = self.epochs_run * self._steps_per_epoch
 
-        # # Learning rate scheduler can only be set up after number of steps
-        # # has been computed
-        # self._lr_scheduler = self._setup_lr_scheduler(
-        #     cfg_lr_scheduler=cfg.lr_scheduler,
-        #     num_training_steps=self.total_epochs * self._steps_per_epoch,
-        #     last_epoch=self.global_step - 1,
-        # )
+        # Learning rate scheduler can only be set up after number of steps
+        # has been computed
+        self._lr_scheduler = self._setup_lr_scheduler(
+            cfg_lr_scheduler=cfg.lr_scheduler,
+            num_training_steps=self.total_epochs * self._steps_per_epoch,
+            last_epoch=self.global_step - 1,
+        )
 
         # Set up profiler
         profiler_cfg = OmegaConf.select(
@@ -268,7 +268,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         ), "Missing profiler config, please make sure to include a valid profiler config under the `profile` key"
         self._profiler = setup_torch_profiler(profiler_cfg)
         if self._is_rank_zero:
-            log.info(f"Profiler instantiated with following config: {cfg.profile}")
+            log.info(f" Profiler instantiated with following config: {cfg.profile}")
 
     def _setup_model(
         self,
@@ -563,87 +563,93 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         num_tokens = 0
 
         # self.epochs_run should be non-zero when we're resuming from a checkpoint
-        for curr_epoch in range(self.epochs_run, self.total_epochs):
-            # Update the sampler to ensure data is correctly shuffled across epochs
-            # in case shuffle is True
-            self._sampler.set_epoch(curr_epoch)
+        with self._profiler as prof:
+            for curr_epoch in range(self.epochs_run, self.total_epochs):
+                # Update the sampler to ensure data is correctly shuffled across epochs
+                # in case shuffle is True
+                self._sampler.set_epoch(curr_epoch)
 
-            pbar = tqdm(total=self._steps_per_epoch, disable=not (rank == 0))
-            for idx, batch in enumerate(self._dataloader):
-                if (
-                    self.max_steps_per_epoch is not None
-                    and (idx // self._gradient_accumulation_steps)
-                    == self.max_steps_per_epoch
-                ):
-                    break
+                pbar = tqdm(total=self._steps_per_epoch, disable=not (rank == 0))
+                for idx, batch in enumerate(self._dataloader):
+                    if (
+                        self.max_steps_per_epoch is not None
+                        and (idx // self._gradient_accumulation_steps)
+                        == self.max_steps_per_epoch
+                    ):
+                        break
 
-                # Both are shape [b, s]
-                tokens, labels = batch["tokens"], batch["labels"]
-                # Get the attention mask and position ids from the dataset if they
-                # exist. Currently, only sample packing in PackedDataset returns these
-                mask = batch.get("mask", None)  # shape [b, s, s]
-                input_pos = batch.get("input_pos", None)  # shape [b, s]
+                    # Both are shape [b, s]
+                    tokens, labels = batch["tokens"], batch["labels"]
+                    # Get the attention mask and position ids from the dataset if they
+                    # exist. Currently, only sample packing in PackedDataset returns these
+                    mask = batch.get("mask", None)  # shape [b, s, s]
+                    input_pos = batch.get("input_pos", None)  # shape [b, s]
 
-                tokens = tokens.to(self._device)
-                num_tokens += tokens.numel()
-                labels = labels.to(self._device)
-                mask = mask.to(self._device) if mask is not None else None
-                input_pos = (
-                    input_pos.to(self._device) if input_pos is not None else None
-                )
-
-                logits = self._model(tokens, mask=mask, input_pos=input_pos)
-                # Shift so that tokens < n predict n
-                logits = logits[..., :-1, :].contiguous()
-                labels = labels[..., 1:].contiguous()
-                logits = logits.transpose(1, 2)
-                # Compute loss
-                loss = self._loss_fn(logits, labels)
-
-                loss = loss / self._gradient_accumulation_steps
-                running_loss += loss
-                loss.backward()
-
-                # Step with optimizer
-                if (idx + 1) % self._gradient_accumulation_steps == 0:
-                    self._optimizer.step()
-                    self._optimizer.zero_grad(set_to_none=True)
-                    self._lr_scheduler.step()
-
-                    # Update the number of steps when the weights are updated
-                    self.global_step += 1
-
-                    loss_to_log = running_loss.item()
-                    pbar.update(1)
-                    pbar.set_description(
-                        f"{curr_epoch+1}|{self.global_step}|Loss: {loss_to_log}"
+                    tokens = tokens.to(self._device)
+                    num_tokens += tokens.numel()
+                    labels = labels.to(self._device)
+                    mask = mask.to(self._device) if mask is not None else None
+                    input_pos = (
+                        input_pos.to(self._device) if input_pos is not None else None
                     )
 
-                    # Log per-step metrics
-                    if (
-                        self.global_step % self._log_every_n_steps == 0
-                        and self._is_rank_zero
-                    ):
-                        time_per_step = time.perf_counter() - t0
-                        log_dict = {
-                            "loss": loss_to_log,
-                            "lr": self._optimizer.param_groups[0]["lr"],
-                            "tokens_per_second_per_gpu": num_tokens / time_per_step,
-                        }
-                        if self._log_peak_memory_stats:
-                            log_dict.update(utils.get_memory_stats(device=self._device))
-                        self._metric_logger.log_dict(
-                            log_dict,
-                            step=self.global_step,
+                    logits = self._model(tokens, mask=mask, input_pos=input_pos)
+                    # Shift so that tokens < n predict n
+                    logits = logits[..., :-1, :].contiguous()
+                    labels = labels[..., 1:].contiguous()
+                    logits = logits.transpose(1, 2)
+                    # Compute loss
+                    loss = self._loss_fn(logits, labels)
+
+                    loss = loss / self._gradient_accumulation_steps
+                    running_loss += loss
+                    loss.backward()
+
+                    # Step with optimizer
+                    if (idx + 1) % self._gradient_accumulation_steps == 0:
+                        self._optimizer.step()
+                        self._optimizer.zero_grad(set_to_none=True)
+                        self._lr_scheduler.step()
+
+                        # Update the number of steps when the weights are updated
+                        self.global_step += 1
+
+                        loss_to_log = running_loss.item()
+                        pbar.update(1)
+                        pbar.set_description(
+                            f"{curr_epoch+1}|{self.global_step}|Loss: {loss_to_log}"
                         )
 
-                    # Reset running stats for the next step
-                    running_loss = 0
-                    num_tokens = 0
-                    t0 = time.perf_counter()
+                        # Log per-step metrics
+                        if (
+                            self.global_step % self._log_every_n_steps == 0
+                            and self._is_rank_zero
+                        ):
+                            time_per_step = time.perf_counter() - t0
+                            log_dict = {
+                                "loss": loss_to_log,
+                                "lr": self._optimizer.param_groups[0]["lr"],
+                                "tokens_per_second_per_gpu": num_tokens / time_per_step,
+                            }
+                            if self._log_peak_memory_stats:
+                                log_dict.update(
+                                    utils.get_memory_stats(device=self._device)
+                                )
+                            self._metric_logger.log_dict(
+                                log_dict,
+                                step=self.global_step,
+                            )
 
-            self.epochs_run += 1
-            self.save_checkpoint(epoch=curr_epoch)
+                        # Reset running stats for the next step
+                        running_loss = 0
+                        num_tokens = 0
+                        t0 = time.perf_counter()
+
+                        # Step profiler
+                        prof.step()
+
+                self.epochs_run += 1
+                self.save_checkpoint(epoch=curr_epoch)
 
     def cleanup(self) -> None:
         if self._is_rank_zero:
@@ -672,8 +678,8 @@ def recipe_main(cfg: DictConfig) -> None:
 
     recipe = LoRAFinetuneRecipeDistributed(cfg=cfg)
     recipe.setup(cfg=cfg)
-    # recipe.train()
-    # recipe.cleanup()
+    recipe.train()
+    recipe.cleanup()
 
 
 if __name__ == "__main__":

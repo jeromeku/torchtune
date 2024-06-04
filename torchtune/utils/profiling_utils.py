@@ -33,11 +33,17 @@ DEFAULT_SCHEDULE_CFG: dict = {
 DEFAULT_PROFILE_DIR: str = "profiler_output"
 
 
+def _warn(msg: str):
+    _, rank = utils.get_world_size_and_rank()
+    if rank == 0:
+        log.warn(msg)
+
+
 def trace_handler(
     prof: torch.profiler.profiler.profile,
     output_dir,
     metric="self_cuda_time_total",
-    row_limit=25,
+    row_limit=-1,
 ):
     _, rank = utils.get_world_size_and_rank()
     curr_trace_dir_name = "iteration_" + str(prof.step_num)
@@ -46,7 +52,8 @@ def trace_handler(
         os.makedirs(curr_trace_dir, exist_ok=True)
 
     # Export chrome / tensorboard trace
-    log.info(f"Dumping traces at step {prof.step_num}")
+    if rank == 0:
+        log.info(f"Dumping traces at step {prof.step_num}")
     begin = time.monotonic()
 
     # Use tensorboard trace handler rather than directly exporting chrome traces since
@@ -56,7 +63,8 @@ def trace_handler(
     )
     exporter(prof)
 
-    log.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
+    if rank == 0:
+        log.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
 
     # Construct the memory timeline file.
     if prof.profile_memory:
@@ -65,15 +73,13 @@ def trace_handler(
                 f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
             )
         except:
-            log.info(
-                "Failed to export memory timeline to html, retrying as gzipped json."
-            )
+            _warn("Failed to export memory timeline to html, retrying as gzipped json.")
             try:
                 prof.export_memory_timeline(
                     f"{curr_trace_dir}/rank{rank}_memory-timeline.json.gz"
                 )
             except:
-                log.info(
+                _warn(
                     "Failed to export memory timeline to gzipped json. Saving profiler timeline object instead."
                 )
                 from torch.profiler._memory_profiler import MemoryProfileTimeline
@@ -94,19 +100,42 @@ def trace_handler(
     with open(f"{curr_trace_dir}/rank{rank}_key_averages.txt", "w") as f:
         print(key_avgs, file=f)
     if rank == 0:
-        print(f"Saving profiling results to {curr_trace_dir}")
+        log.info(f"Saving profiling results to {curr_trace_dir}")
 
     # TODO: Is this necessary?
+    # see https://github.com/pytorch/torchtitan/blob/3050098dcee4901d88c712f9e8e9703d1735a29b/torchtitan/profiling.py#L48
     torch.distributed.barrier()
 
 
-def _warn(msg: str):
-    _, rank = utils.get_world_size_and_rank()
-    if rank == 0:
-        log.warn(msg)
-
-
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
+    """
+    Sets up torch.profiler.profile
+
+    Args:
+        cfg (DictConfig): profiler config with expected structure:
+            ```
+            profile:
+                output_dir: str
+                CPU: bool
+                CUDA: bool
+
+                profiler:
+                    _component_: torch.profiler.profile
+                    profile_memory: bool
+                    with_stack: bool
+                    record_shapes: bool
+                    with_flops: bool
+                schedule:
+                    _component_: torch.profiler.schedule
+                    wait: int
+                    warmup: int
+                    active: int
+                    repeat: int
+            ```
+        Note that the profiler schedule is for an optimizer update step: e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
+    Returns:
+        torch.profiler.profile
+    """
     torch_profiler_cfg = OmegaConf.select(
         cfg, "profiler", default=None, throw_on_missing=False
     )
@@ -150,6 +179,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     )
 
     # profile_memory requires with_stack and record_shapes, hence we override these if profile_memory is True
+    # See torch.profiler.profiler._memory_profile
     with_stack = (
         OmegaConf.select(torch_profiler_cfg, "with_stack", default=False)
         or profile_memory
@@ -174,7 +204,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
 
     output_dir = Path(profiler_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    callback = partial(trace_handler, output_dir=cfg.output_dir)
+    callback = partial(trace_handler, output_dir=output_dir)
 
     # Update profiler cfg
     cfg.output_dir = profiler_output_dir

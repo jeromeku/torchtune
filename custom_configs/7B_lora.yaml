@@ -45,11 +45,17 @@ checkpointer:
 resume_from_checkpoint: False
 
 # Dataset and Sampler
+# dataset:
+#   _component_: torchtune.datasets.alpaca_cleaned_dataset
+#   train_on_input: True
+#   packed: True
+#   max_seq_len: 512
 dataset:
-  _component_: torchtune.datasets.alpaca_cleaned_dataset
-  train_on_input: True
-  packed: True
+  _component_: torchtune.datasets.wikitext_dataset
+  subset: wikitext-2-v1
+  split: test
   max_seq_len: 512
+
 seed: null
 shuffle: True
 batch_size: 2
@@ -68,8 +74,8 @@ loss:
 
 # Training
 epochs: 1
-max_steps_per_epoch: 10
-gradient_accumulation_steps: 2
+max_steps_per_epoch: 5
+gradient_accumulation_steps: 1
 
 # Logging
 output_dir: ${artifact_dir}/logs
@@ -89,17 +95,17 @@ profile:
   enabled: True
   CPU: True
   CUDA: True
-  output_dir: ${artifact_dir}/profiling
+  #output_dir: ${artifact_dir}/profiling
   #torch.profiler.profile
   profiler:
     _component_: torch.profiler.profile
-    profile_memory: True
+    profile_memory: False
     with_stack: False
     record_shapes: False
     with_flops: False
   #torch.profiler.schedule
   schedule:
     _component_: torch.profiler.schedule
-    wait: 1
+    wait: 3
     warmup: 1
     active: 1
