@@ -4,21 +4,21 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import contextlib
 import logging
 import os
-import shutil
 import time
 from functools import partial
+from pathlib import Path
 
 import torch
 import torch.distributed
+from omegaconf import DictConfig, OmegaConf
 from torch._C._profiler import _ExperimentalConfig
 from torch.profiler import tensorboard_trace_handler
 
-WARMUP = 3
+from torchtune import config, utils
 
-logger = logging.getLogger()
+log = utils.get_logger("INFO")
 
 # adapted from https://github.com/pytorch/torchtitan
 
@@ -46,7 +46,7 @@ def trace_handler(
         os.makedirs(curr_trace_dir, exist_ok=True)
 
     # Export chrome / tensorboard trace
-    logger.info(f"Dumping traces at step {prof.step_num}")
+    log.info(f"Dumping traces at step {prof.step_num}")
     begin = time.monotonic()
 
     # Use tensorboard trace handler rather than directly exporting chrome traces since
@@ -56,7 +56,7 @@ def trace_handler(
     )
     exporter(prof)
 
-    logger.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
+    log.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
 
     # Construct the memory timeline file.
     if prof.profile_memory:
@@ -65,7 +65,7 @@ def trace_handler(
                 f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
             )
         except:
-            logger.info(
+            log.info(
                 "Failed to export memory timeline to html, retrying as gzipped json."
             )
             try:
@@ -73,7 +73,7 @@ def trace_handler(
                     f"{curr_trace_dir}/rank{rank}_memory-timeline.json.gz"
                 )
             except:
-                logger.info(
+                log.info(
                     "Failed to export memory timeline to gzipped json. Saving profiler timeline object instead."
                 )
                 from torch.profiler._memory_profiler import MemoryProfileTimeline
@@ -100,87 +100,97 @@ def trace_handler(
     torch.distributed.barrier()
 
 
-@contextlib.contextmanager
-def profiling_context(args, rank):
-    enable_profiling = args["profile"]
+def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
+    torch_profiler_cfg = OmegaConf.select(
+        cfg, "profiler", default=None, throw_on_missing=False
+    )
+    assert (
+        torch_profiler_cfg is not None
+    ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
 
-    if enable_profiling:
-        model_name = args["model_name"].split("/")[-1]
-        train_type = args["train_type"]
-        output_dir = (
-            args["profiling_output"]
-            if args["profiling_output"]
-            else f"./{model_name}_{train_type}"
+    # Set up profiler activities
+    activities = []
+    if cfg.CPU:
+        activities.append(torch.profiler.ProfilerActivity.CPU)
+    if cfg.CUDA:
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    assert len(activities) > 0, "At least one profiler activity must be enabled"
+
+    # Set up profiler schedule
+    schedule_cfg = OmegaConf.select(
+        cfg, "schedule", default=None, throw_on_missing=False
+    )
+
+    # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
+    if schedule_cfg is None:
+        log.warn(
+            f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
         )
-
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
-
-        logger.info(f"Profiling enabled. Traces will be saved at {output_dir}")
-
-        warmup = args["warmup_steps"]
-        active = args["active_steps"]
-        repeat = args["repeat"]
-
-        if repeat == 0:
-            steps_per_cycle = args["profiling_frequency"]
-            wait = steps_per_cycle - (active + warmup)
-        else:
-            wait = args["wait_steps"]
-            steps_per_cycle = wait + warmup + active
-        assert (
-            wait >= 0
-        ), "profile_freq must be greater than or equal to warmup + active"
-        logger.info(
-            f"Profiler schedule - steps per cycle: {steps_per_cycle} wait: {wait} warmup: {warmup} active: {active} repeat: {repeat if repeat !=0 else 'inf'}"
-        )
-
-        profile_memory = args["export_memory_timeline"]
-        export_memory_timeline = args["export_memory_timeline"]
-        with_stack = args["with_stack"] or args["export_memory_timeline"]
-        with_shapes = args["with_shapes"] or export_memory_timeline
-        callback = partial(
-            trace_handler,
-            rank=rank,
-            export_memory_timeline=export_memory_timeline,
-            output_dir=output_dir,
-            with_stack=with_stack,
-            group_by_input_shape=with_shapes,
-            group_by_stack=5 if with_stack else 0,
-        )
-
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            with_stack=with_stack,
-            profile_memory=profile_memory,
-            record_shapes=with_shapes,
-            schedule=torch.profiler.schedule(
-                wait=wait, warmup=warmup, active=active, repeat=repeat
-            ),
-            on_trace_ready=callback,
-            experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True)
-            if with_stack
-            else None,
-        ) as torch_profiler:
-            yield torch_profiler
+        schedule_cfg = DEFAULT_SCHEDULE_CFG
     else:
+        assert all(
+            k in schedule_cfg for k in ["wait", "warmup", "active"]
+        ), "Invalid schedule config: must specify wait, warmup, active"
+        if "repeat" not in schedule_cfg:
+            log.warn(f" No repeat found in schedule config, setting to 0")
+            schedule_cfg["repeat"] = 0
 
-        class FakeProfiler:
-            """
-            Fake profiler object when profiling is not enabled.
+    schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
 
-            """
+    profile_memory = OmegaConf.select(
+        torch_profiler_cfg, "profile_memory", default=False
+    )
 
-            def __enter__(self):
-                return self
+    # profile_memory requires with_stack and record_shapes, hence we override these if profile_memory is True
+    with_stack = (
+        OmegaConf.select(torch_profiler_cfg, "with_stack", default=False)
+        or profile_memory
+    )
+    record_shapes = (
+        OmegaConf.select(torch_profiler_cfg, "record_shapes", default=False)
+        or profile_memory
+    )
 
-            def __exit__(self, *args, **kwargs):
-                pass
+    # experimental config is needed to export stacks: see https://github.com/pytorch/pytorch/issues/100253
+    experimental_config = _ExperimentalConfig(verbose=True) if with_stack else None
 
-            def step(self):
-                pass
+    # Handle exporting of trace, memory timeline and other profiler artifacts
+    profiler_output_dir = OmegaConf.select(
+        cfg, "output_dir", default=None, throw_on_missing=False
+    )
+    if profiler_output_dir is None:
+        log.warn(
+            f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
+        )
+        profiler_output_dir = DEFAULT_PROFILE_DIR
 
-        yield FakeProfiler()
+    output_dir = Path(profiler_output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    callback = partial(trace_handler, output_dir=cfg.output_dir)
+
+    # Update profiler cfg
+    cfg.output_dir = profiler_output_dir
+    cfg.schedule = schedule_cfg
+    cfg.profiler.profile_memory = profile_memory
+    cfg.profiler.with_stack = with_stack
+    cfg.profiler.record_shapes = record_shapes
+
+    profiler = config.instantiate(
+        torch_profiler_cfg,
+        activities=activities,
+        schedule=schedule,
+        profile_memory=profile_memory,
+        with_stack=with_stack,
+        record_shapes=record_shapes,
+        experimental_config=experimental_config,
+        on_trace_ready=callback,
+    )
+
+    if torch.distributed.get_rank() == 0:
+        pretty_schedule = {
+            k: v for k, v in schedule_cfg.items() if not k.startswith("_")
+        }
+        log.info(
+            f" Profiler is initialized, activities: {activities}, schedule: {pretty_schedule}, profile_memory: {profiler.profile_memory}, record_shapes: {profiler.record_shapes}, with_stack: {profiler.with_stack}, output_dir: {profiler_output_dir}"
+        )
+    return profiler

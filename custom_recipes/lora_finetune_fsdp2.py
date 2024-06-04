@@ -8,7 +8,6 @@ import os
 import sys
 import time
 from functools import partial
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from warnings import warn
 
@@ -36,12 +35,7 @@ from torchtune.modules.peft.peft_utils import (
     validate_state_dict_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.utils.profiling_utils import (
-    DEFAULT_PROFILE_DIR,
-    DEFAULT_SCHEDULE_CFG,
-    _ExperimentalConfig,
-    trace_handler,
-)
+from torchtune.utils.profiling_utils import setup_torch_profiler
 
 log = utils.get_logger("DEBUG")
 
@@ -269,86 +263,84 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             cfg, "profile", default=None, throw_on_missing=False
         )
 
-        if profiler_cfg is not None:
-            torch_profiler_cfg = OmegaConf.select(
-                profiler_cfg, "profiler", default=None, throw_on_missing=False
-            )
-            assert (
-                torch_profiler_cfg is not None
-            ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
+        assert (
+            profiler_cfg is not None
+        ), "Missing profiler config, please make sure to include a valid profiler config under the `profile` key"
+        self._profiler = setup_torch_profiler(profiler_cfg)
+        if self._is_rank_zero:
+            log.info(f"Profiler instantiated with following config: {cfg.profile}")
+        # torch_profiler_cfg = OmegaConf.select(
+        #     profiler_cfg, "profiler", default=None, throw_on_missing=False
+        # )
+        # assert (
+        #     torch_profiler_cfg is not None
+        # ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
 
-            # Set up profiler activities
-            activities = []
-            if profiler_cfg.CPU:
-                activities.append(torch.profiler.ProfilerActivity.CPU)
-            if profiler_cfg.CUDA:
-                activities.append(torch.profiler.ProfilerActivity.CUDA)
-            assert len(activities) > 0, "At least one profiler activity must be enabled"
+        # # Set up profiler activities
+        # activities = []
+        # if profiler_cfg.CPU:
+        #     activities.append(torch.profiler.ProfilerActivity.CPU)
+        # if profiler_cfg.CUDA:
+        #     activities.append(torch.profiler.ProfilerActivity.CUDA)
+        # assert len(activities) > 0, "At least one profiler activity must be enabled"
 
-            # Set up profiler schedule
-            schedule_cfg = OmegaConf.select(
-                profiler_cfg, "schedule", default=None, throw_on_missing=False
-            )
+        # # Set up profiler schedule
+        # schedule_cfg = OmegaConf.select(
+        #     profiler_cfg, "schedule", default=None, throw_on_missing=False
+        # )
 
-            if schedule_cfg is None:
-                log.warn(
-                    f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
-                )
-                schedule_cfg = DEFAULT_SCHEDULE_CFG
+        # if schedule_cfg is None:
+        #     log.warn(
+        #         f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
+        #     )
+        #     schedule_cfg = DEFAULT_SCHEDULE_CFG
 
-            schedule = (
-                config.instantiate(schedule_cfg) if schedule_cfg is not None else None
-            )
+        # schedule = (
+        #     config.instantiate(schedule_cfg) if schedule_cfg is not None else None
+        # )
 
-            # Handle exporting of trace, memory timeline and other profiler artifacts
-            profiler_output_dir = OmegaConf.select(
-                profiler_cfg, "output_dir", default=None, throw_on_missing=False
-            )
-            if profiler_output_dir is None:
-                log.warn(
-                    f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
-                )
-                profiler_output_dir = DEFAULT_PROFILE_DIR
+        # # Handle exporting of trace, memory timeline and other profiler artifacts
+        # profiler_output_dir = OmegaConf.select(
+        #     profiler_cfg, "output_dir", default=None, throw_on_missing=False
+        # )
+        # if profiler_output_dir is None:
+        #     log.warn(
+        #         f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
+        #     )
+        #     profiler_output_dir = DEFAULT_PROFILE_DIR
 
-            output_dir = Path(profiler_output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            callback = partial(trace_handler, output_dir=profiler_cfg.output_dir)
+        # output_dir = Path(profiler_output_dir)
+        # output_dir.mkdir(parents=True, exist_ok=True)
+        # callback = partial(trace_handler, output_dir=profiler_cfg.output_dir)
 
-            # https://github.com/pytorch/pytorch/issues/100253
-            experimental_config = (
-                _ExperimentalConfig(verbose=True)
-                if torch_profiler_cfg.record_shapes
-                else None
-            )
+        # # https://github.com/pytorch/pytorch/issues/100253
+        # experimental_config = (
+        #     _ExperimentalConfig(verbose=True)
+        #     if torch_profiler_cfg.record_shapes
+        #     else None
+        # )
 
-            profile_memory = OmegaConf.select(
-                torch_profiler_cfg, "profile_memory", default=False
-            )
-            # Set up profiler
-            self._profiler = config.instantiate(
-                torch_profiler_cfg,
-                activities=activities,
-                schedule=schedule,
-                experimental_config=experimental_config,
-                # profile_memory requires with_stack and record_shapes
-                profile_memory=profile_memory,
-                with_stack=OmegaConf.select(
-                    torch_profiler_cfg, "with_stack", default=False
-                )
-                or profile_memory,
-                record_shapes=OmegaConf.select(
-                    torch_profiler_cfg, "record_shapes", default=False
-                )
-                or profile_memory,
-                on_trace_ready=callback,
-            )
-            if torch.distributed.get_rank() == 0:
-                pretty_schedule = {
-                    k: v for k, v in schedule_cfg.items() if not k.startswith("_")
-                }
-                log.info(
-                    f" Profiler is initialized, activities: {activities}, schedule: {pretty_schedule}, profile_memory: {self._profiler.profile_memory}, record_shapes: {self._profiler.record_shapes}, with_stack: {self._profiler.with_stack}, output_dir: {profiler_output_dir}"
-                )
+        # profile_memory = OmegaConf.select(
+        #     torch_profiler_cfg, "profile_memory", default=False
+        # )
+        # # Set up profiler
+        # self._profiler = config.instantiate(
+        #     torch_profiler_cfg,
+        #     activities=activities,
+        #     schedule=schedule,
+        #     experimental_config=experimental_config,
+        #     # profile_memory requires with_stack and record_shapes
+        #     profile_memory=profile_memory,
+        #     with_stack=OmegaConf.select(
+        #         torch_profiler_cfg, "with_stack", default=False
+        #     )
+        #     or profile_memory,
+        #     record_shapes=OmegaConf.select(
+        #         torch_profiler_cfg, "record_shapes", default=False
+        #     )
+        #     or profile_memory,
+        #     on_trace_ready=callback,
+        # )
 
     def _setup_model(
         self,
