@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 from warnings import warn
 
 import torch
+import torch.distributed
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch import nn
 from torch.distributed import destroy_process_group, init_process_group
@@ -37,6 +38,7 @@ from torchtune.modules.peft.peft_utils import (
 from torchtune.recipe_interfaces import FTRecipeInterface
 from torchtune.utils.profiling_utils import (
     DEFAULT_PROFILE_DIR,
+    DEFAULT_SCHEDULE_CFG,
     _ExperimentalConfig,
     trace_handler,
 )
@@ -206,61 +208,61 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             # log config with parameter override
             self._metric_logger.log_config(cfg)
 
-        checkpoint_dict = self.load_checkpoint(cfg_checkpointer=cfg.checkpointer)
+        # checkpoint_dict = self.load_checkpoint(cfg_checkpointer=cfg.checkpointer)
 
-        self._model = self._setup_model(
-            cfg_model=cfg.model,
-            enable_activation_checkpointing=cfg.enable_activation_checkpointing,
-            base_model_state_dict=checkpoint_dict[utils.MODEL_KEY],
-            lora_weights_state_dict=(
-                checkpoint_dict[utils.ADAPTER_KEY]
-                if self._resume_from_checkpoint
-                else None
-            ),
-        )
-        self._tokenizer = config.instantiate(cfg.tokenizer)
+        # self._model = self._setup_model(
+        #     cfg_model=cfg.model,
+        #     enable_activation_checkpointing=cfg.enable_activation_checkpointing,
+        #     base_model_state_dict=checkpoint_dict[utils.MODEL_KEY],
+        #     lora_weights_state_dict=(
+        #         checkpoint_dict[utils.ADAPTER_KEY]
+        #         if self._resume_from_checkpoint
+        #         else None
+        #     ),
+        # )
+        # self._tokenizer = config.instantiate(cfg.tokenizer)
 
-        self._optimizer = self._setup_optimizer(
-            cfg_optimizer=cfg.optimizer,
-            opt_state_dict=checkpoint_dict[utils.OPT_KEY]
-            if self._resume_from_checkpoint
-            else None,
-        )
+        # self._optimizer = self._setup_optimizer(
+        #     cfg_optimizer=cfg.optimizer,
+        #     opt_state_dict=checkpoint_dict[utils.OPT_KEY]
+        #     if self._resume_from_checkpoint
+        #     else None,
+        # )
 
-        self._loss_fn = config.instantiate(cfg.loss)
+        # self._loss_fn = config.instantiate(cfg.loss)
 
-        # sampler and dataloader depend on the tokenizer and loss_fn and should be
-        # setup after all of these are setup
-        self._sampler, self._dataloader = self._setup_data(
-            cfg_dataset=cfg.dataset,
-            shuffle=cfg.shuffle,
-            batch_size=cfg.batch_size,
-        )
+        # # sampler and dataloader depend on the tokenizer and loss_fn and should be
+        # # setup after all of these are setup
+        # self._sampler, self._dataloader = self._setup_data(
+        #     cfg_dataset=cfg.dataset,
+        #     shuffle=cfg.shuffle,
+        #     batch_size=cfg.batch_size,
+        # )
 
-        # Finally update the recipe state which can only be correctly set after all of the
-        # other components have been initialized and updated.
+        # # Finally update the recipe state which can only be correctly set after all of the
+        # # other components have been initialized and updated.
 
-        # Number of training steps in each epoch depends on the number of batches produced
-        # by the dataloader and the max_steps_per_epoch param set by the user and is used
-        # for logging and tracking training state. This should be computed after the dataloader
-        # has been setup
-        self._steps_per_epoch = (
-            len(self._dataloader) // self._gradient_accumulation_steps
-        )
-        if (
-            self.max_steps_per_epoch is not None
-            and self.max_steps_per_epoch < self._steps_per_epoch
-        ):
-            self._steps_per_epoch = self.max_steps_per_epoch
-        self.global_step = self.epochs_run * self._steps_per_epoch
+        # # Number of training steps in each epoch depends on the number of batches produced
+        # # by the dataloader and the max_steps_per_epoch param set by the user and is used
+        # # for logging and tracking training state. This should be computed after the dataloader
+        # # has been setup
+        # self._steps_per_epoch = (
+        #     len(self._dataloader) // self._gradient_accumulation_steps
+        # )
+        # if (
+        #     self.max_steps_per_epoch is not None
+        #     and self.max_steps_per_epoch < self._steps_per_epoch
+        # ):
+        #     self._steps_per_epoch = self.max_steps_per_epoch
+        # self.global_step = self.epochs_run * self._steps_per_epoch
 
-        # Learning rate scheduler can only be set up after number of steps
-        # has been computed
-        self._lr_scheduler = self._setup_lr_scheduler(
-            cfg_lr_scheduler=cfg.lr_scheduler,
-            num_training_steps=self.total_epochs * self._steps_per_epoch,
-            last_epoch=self.global_step - 1,
-        )
+        # # Learning rate scheduler can only be set up after number of steps
+        # # has been computed
+        # self._lr_scheduler = self._setup_lr_scheduler(
+        #     cfg_lr_scheduler=cfg.lr_scheduler,
+        #     num_training_steps=self.total_epochs * self._steps_per_epoch,
+        #     last_epoch=self.global_step - 1,
+        # )
 
         # Set up profiler
         profiler_cfg = OmegaConf.select(
@@ -279,7 +281,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             activities = []
             if profiler_cfg.CPU:
                 activities.append(torch.profiler.ProfilerActivity.CPU)
-            if profiler_cfg.GPU:
+            if profiler_cfg.CUDA:
                 activities.append(torch.profiler.ProfilerActivity.CUDA)
             assert len(activities) > 0, "At least one profiler activity must be enabled"
 
@@ -287,9 +289,13 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             schedule_cfg = OmegaConf.select(
                 profiler_cfg, "schedule", default=None, throw_on_missing=False
             )
-            log.warn(
-                "No schedule found in profiler config, will result in excessively large profiling outputs!"
-            )
+
+            if schedule_cfg is None:
+                log.warn(
+                    f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
+                )
+                schedule_cfg = DEFAULT_SCHEDULE_CFG
+
             schedule = (
                 config.instantiate(schedule_cfg) if schedule_cfg is not None else None
             )
@@ -300,7 +306,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             )
             if profiler_output_dir is None:
                 log.warn(
-                    f"No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
+                    f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
                 )
                 profiler_output_dir = DEFAULT_PROFILE_DIR
 
@@ -315,14 +321,34 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
                 else None
             )
 
+            profile_memory = OmegaConf.select(
+                torch_profiler_cfg, "profile_memory", default=False
+            )
             # Set up profiler
             self._profiler = config.instantiate(
                 torch_profiler_cfg,
                 activities=activities,
                 schedule=schedule,
                 experimental_config=experimental_config,
+                # profile_memory requires with_stack and record_shapes
+                profile_memory=profile_memory,
+                with_stack=OmegaConf.select(
+                    torch_profiler_cfg, "with_stack", default=False
+                )
+                or profile_memory,
+                record_shapes=OmegaConf.select(
+                    torch_profiler_cfg, "record_shapes", default=False
+                )
+                or profile_memory,
                 on_trace_ready=callback,
             )
+            if torch.distributed.get_rank() == 0:
+                pretty_schedule = {
+                    k: v for k, v in schedule_cfg.items() if not k.startswith("_")
+                }
+                log.info(
+                    f" Profiler is initialized, activities: {activities}, schedule: {pretty_schedule}, profile_memory: {self._profiler.profile_memory}, record_shapes: {self._profiler.record_shapes}, with_stack: {self._profiler.with_stack}, output_dir: {profiler_output_dir}"
+                )
 
     def _setup_model(
         self,
@@ -726,8 +752,8 @@ def recipe_main(cfg: DictConfig) -> None:
 
     recipe = LoRAFinetuneRecipeDistributed(cfg=cfg)
     recipe.setup(cfg=cfg)
-    recipe.train()
-    recipe.cleanup()
+    # recipe.train()
+    # recipe.cleanup()
 
 
 if __name__ == "__main__":

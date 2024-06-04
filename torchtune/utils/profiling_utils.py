@@ -23,9 +23,13 @@ logger = logging.getLogger()
 # adapted from https://github.com/pytorch/torchtitan
 
 # 10 step cycle: does nothing for 8 steps, warms up for 1, then records for 1
-DEFAULT_SCHEDULE: torch.profiler.schedule = torch.profiler.schedule(
-    wait=8, warmup=1, active=1, repeat=0
-)
+DEFAULT_SCHEDULE_CFG: dict = {
+    "_component_": "torch.profiler.schedule",
+    "wait": 8,
+    "warmup": 1,
+    "active": 1,
+    "repeat": 0,
+}
 DEFAULT_PROFILE_DIR: str = "profiler_output"
 
 
