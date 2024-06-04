@@ -7,23 +7,23 @@
 import os
 import sys
 import time
-
 from functools import partial
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from warnings import warn
 
 import torch
-from omegaconf import DictConfig, ListConfig
-
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch import nn
 from torch.distributed import destroy_process_group, init_process_group
 from torch.distributed._composable.fsdp import fully_shard
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     CheckpointWrapper,
 )
-
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+
 from torchtune import config, modules, utils
 from torchtune.datasets import ConcatDataset
 from torchtune.modules.peft import LoRALinear
@@ -35,8 +35,11 @@ from torchtune.modules.peft.peft_utils import (
     validate_state_dict_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-
-from tqdm import tqdm
+from torchtune.utils.profiling_utils import (
+    DEFAULT_PROFILE_DIR,
+    _ExperimentalConfig,
+    trace_handler,
+)
 
 log = utils.get_logger("DEBUG")
 
@@ -258,6 +261,68 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             num_training_steps=self.total_epochs * self._steps_per_epoch,
             last_epoch=self.global_step - 1,
         )
+
+        # Set up profiler
+        profiler_cfg = OmegaConf.select(
+            cfg, "profile", default=None, throw_on_missing=False
+        )
+
+        if profiler_cfg is not None:
+            torch_profiler_cfg = OmegaConf.select(
+                profiler_cfg, "profiler", default=None, throw_on_missing=False
+            )
+            assert (
+                torch_profiler_cfg is not None
+            ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
+
+            # Set up profiler activities
+            activities = []
+            if profiler_cfg.CPU:
+                activities.append(torch.profiler.ProfilerActivity.CPU)
+            if profiler_cfg.GPU:
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+            assert len(activities) > 0, "At least one profiler activity must be enabled"
+
+            # Set up profiler schedule
+            schedule_cfg = OmegaConf.select(
+                profiler_cfg, "schedule", default=None, throw_on_missing=False
+            )
+            log.warn(
+                "No schedule found in profiler config, will result in excessively large profiling outputs!"
+            )
+            schedule = (
+                config.instantiate(schedule_cfg) if schedule_cfg is not None else None
+            )
+
+            # Handle exporting of trace, memory timeline and other profiler artifacts
+            profiler_output_dir = OmegaConf.select(
+                profiler_cfg, "output_dir", default=None, throw_on_missing=False
+            )
+            if profiler_output_dir is None:
+                log.warn(
+                    f"No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
+                )
+                profiler_output_dir = DEFAULT_PROFILE_DIR
+
+            output_dir = Path(profiler_output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            callback = partial(trace_handler, output_dir=profiler_cfg.output_dir)
+
+            # https://github.com/pytorch/pytorch/issues/100253
+            experimental_config = (
+                _ExperimentalConfig(verbose=True)
+                if torch_profiler_cfg.record_shapes
+                else None
+            )
+
+            # Set up profiler
+            self._profiler = config.instantiate(
+                torch_profiler_cfg,
+                activities=activities,
+                schedule=schedule,
+                experimental_config=experimental_config,
+                on_trace_ready=callback,
+            )
 
     def _setup_model(
         self,
@@ -487,7 +552,6 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         # Now that we have the model and opt state dict, create the actual checkpoint dict
         # to be sent to the checkpointer and ultimately written to file
         if self._is_rank_zero:
-
             # Filter out the adapter keys and weights from the model state dict. These will
             # be saved separately
             adapter_key_filter = lambda x: x in self.adapter_params
@@ -554,7 +618,6 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
 
         # self.epochs_run should be non-zero when we're resuming from a checkpoint
         for curr_epoch in range(self.epochs_run, self.total_epochs):
-
             # Update the sampler to ensure data is correctly shuffled across epochs
             # in case shuffle is True
             self._sampler.set_epoch(curr_epoch)

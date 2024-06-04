@@ -5,89 +5,113 @@
 # LICENSE file in the root directory of this source tree.
 
 import contextlib
-import os
-import time
 import logging
+import os
+import shutil
+import time
+from functools import partial
+
 import torch
 import torch.distributed
-from functools import partial
-import shutil
+from torch._C._profiler import _ExperimentalConfig
 from torch.profiler import tensorboard_trace_handler
+
 WARMUP = 3
 
 logger = logging.getLogger()
 
-#adapted from https://github.com/pytorch/torchtitan
-       
-def trace_handler(prof: torch.profiler.profiler.profile, rank, export_memory_timeline, output_dir, metric="self_cuda_time_total", with_stack=True, group_by_stack=0, group_by_input_shape=False, row_limit=25):
+# adapted from https://github.com/pytorch/torchtitan
+
+# 10 step cycle: does nothing for 8 steps, warms up for 1, then records for 1
+DEFAULT_SCHEDULE: torch.profiler.schedule = torch.profiler.schedule(
+    wait=8, warmup=1, active=1, repeat=0
+)
+DEFAULT_PROFILE_DIR: str = "profiler_output"
+
+
+def trace_handler(
+    prof: torch.profiler.profiler.profile,
+    output_dir,
+    metric="self_cuda_time_total",
+    row_limit=25,
+):
+    rank = torch.distributed.get_rank()
     curr_trace_dir_name = "iteration_" + str(prof.step_num)
     curr_trace_dir = os.path.join(output_dir, curr_trace_dir_name)
     if not os.path.exists(curr_trace_dir):
         os.makedirs(curr_trace_dir, exist_ok=True)
 
-    #Export chrome / tensorboard trace
+    # Export chrome / tensorboard trace
     logger.info(f"Dumping traces at step {prof.step_num}")
     begin = time.monotonic()
-    
-    #Use tensorboard trace handler rather than directly exporting chrome traces since 
-    #tensorboard doesn't seem to be able to parse traces when with prof.export_chrome_trace
-    exporter = tensorboard_trace_handler(curr_trace_dir, worker_name=f"rank{rank}", use_gzip=True)
-    exporter(prof)
-    #prof.export_chrome_trace(f"{curr_trace_dir}/rank{rank}_trace.json")
-    
-    logger.info(
-        f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds"
+
+    # Use tensorboard trace handler rather than directly exporting chrome traces since
+    # tensorboard doesn't seem to be able to parse traces when with prof.export_chrome_trace
+    exporter = tensorboard_trace_handler(
+        curr_trace_dir, worker_name=f"rank{rank}", use_gzip=True
     )
-    
-    #Construct the memory timeline file.
-    if export_memory_timeline:
+    exporter(prof)
+
+    logger.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
+
+    # Construct the memory timeline file.
+    if prof.profile_memory:
         try:
             prof.export_memory_timeline(
-            f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
-        )
+                f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
+            )
         except:
-            logger.info("Failed to export memory timeline to html, retrying as gzipped json.")
+            logger.info(
+                "Failed to export memory timeline to html, retrying as gzipped json."
+            )
             try:
                 prof.export_memory_timeline(
                     f"{curr_trace_dir}/rank{rank}_memory-timeline.json.gz"
                 )
             except:
-                
-                logger.info("Failed to export memory timeline to gzipped json. Saving profiler timeline object instead.")
+                logger.info(
+                    "Failed to export memory timeline to gzipped json. Saving profiler timeline object instead."
+                )
                 from torch.profiler._memory_profiler import MemoryProfileTimeline
+
                 memory_profile = MemoryProfileTimeline(prof._memory_profile())
-                torch.save(memory_profile, f"{curr_trace_dir}/rank{rank}_memory-timeline.pt")
-                
-    #Dump stack traces
-    if with_stack:
+                torch.save(
+                    memory_profile, f"{curr_trace_dir}/rank{rank}_memory-timeline.pt"
+                )
+
+    # Dump stack traces
+    if prof.with_stack:
         prof.export_stacks(f"{curr_trace_dir}/rank{rank}_stacks.txt", metric=metric)
 
-    #Export event averages
+    # Export event averages
     key_avgs = prof.key_averages(
-        group_by_input_shape=group_by_input_shape, group_by_stack_n=group_by_stack
+        group_by_input_shape=prof.record_shapes, group_by_stack_n=5
     ).table(sort_by=metric, row_limit=row_limit)
     with open(f"{curr_trace_dir}/rank{rank}_key_averages.txt", "w") as f:
-        print(
-            key_avgs, file=f
-        )
+        print(key_avgs, file=f)
     if rank == 0:
         print(f"Saving profiling results to {curr_trace_dir}")
 
-    #TODO: Is this necessary?
+    # TODO: Is this necessary?
     torch.distributed.barrier()
+
 
 @contextlib.contextmanager
 def profiling_context(args, rank):
     enable_profiling = args["profile"]
-    
-    if enable_profiling:          
+
+    if enable_profiling:
         model_name = args["model_name"].split("/")[-1]
         train_type = args["train_type"]
-        output_dir = args["profiling_output"] if args["profiling_output"] else f"./{model_name}_{train_type}"
-      
+        output_dir = (
+            args["profiling_output"]
+            if args["profiling_output"]
+            else f"./{model_name}_{train_type}"
+        )
+
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
-        
+
         logger.info(f"Profiling enabled. Traces will be saved at {output_dir}")
 
         warmup = args["warmup_steps"]
@@ -99,23 +123,28 @@ def profiling_context(args, rank):
             wait = steps_per_cycle - (active + warmup)
         else:
             wait = args["wait_steps"]
-            steps_per_cycle = wait + warmup + active        
+            steps_per_cycle = wait + warmup + active
         assert (
             wait >= 0
         ), "profile_freq must be greater than or equal to warmup + active"
-        logger.info(f"Profiler schedule - steps per cycle: {steps_per_cycle} wait: {wait} warmup: {warmup} active: {active} repeat: {repeat if repeat !=0 else 'inf'}")
+        logger.info(
+            f"Profiler schedule - steps per cycle: {steps_per_cycle} wait: {wait} warmup: {warmup} active: {active} repeat: {repeat if repeat !=0 else 'inf'}"
+        )
 
         profile_memory = args["export_memory_timeline"]
         export_memory_timeline = args["export_memory_timeline"]
         with_stack = args["with_stack"] or args["export_memory_timeline"]
         with_shapes = args["with_shapes"] or export_memory_timeline
-        callback = partial(trace_handler, rank=rank, 
-                            export_memory_timeline=export_memory_timeline, 
-                            output_dir=output_dir,
-                            with_stack=with_stack,
-                            group_by_input_shape=with_shapes, 
-                            group_by_stack=5 if with_stack else 0)
-        
+        callback = partial(
+            trace_handler,
+            rank=rank,
+            export_memory_timeline=export_memory_timeline,
+            output_dir=output_dir,
+            with_stack=with_stack,
+            group_by_input_shape=with_shapes,
+            group_by_stack=5 if with_stack else 0,
+        )
+
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
@@ -124,23 +153,30 @@ def profiling_context(args, rank):
             with_stack=with_stack,
             profile_memory=profile_memory,
             record_shapes=with_shapes,
-            schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
+            schedule=torch.profiler.schedule(
+                wait=wait, warmup=warmup, active=active, repeat=repeat
+            ),
             on_trace_ready=callback,
-            experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True) if with_stack else None,
+            experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True)
+            if with_stack
+            else None,
         ) as torch_profiler:
             yield torch_profiler
     else:
+
         class FakeProfiler:
             """
             Fake profiler object when profiling is not enabled.
-            
+
             """
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *args, **kwargs):
                 pass
-            
+
             def step(self):
                 pass
-        
+
         yield FakeProfiler()

@@ -87,14 +87,17 @@ enable_activation_checkpointing: False
 #Profiling
 profile:
   enabled: True
-  CPU: ???
+  CPU: True
   CUDA: True
+  output_dir: ${artifact_dir}/profiling
+  #torch.profiler.profile
   profiler:
     _component_: torch.profiler.profile
     record_shapes: True
     profile_memory: True
     with_stack: True
     with_flops: True
+  #torch.profiler.schedule
   schedule:
     _component_: torch.profiler.schedule
     wait: 1
