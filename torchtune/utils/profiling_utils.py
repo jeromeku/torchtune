@@ -39,7 +39,7 @@ def trace_handler(
     metric="self_cuda_time_total",
     row_limit=25,
 ):
-    rank = torch.distributed.get_rank()
+    _, rank = utils.get_world_size_and_rank()
     curr_trace_dir_name = "iteration_" + str(prof.step_num)
     curr_trace_dir = os.path.join(output_dir, curr_trace_dir_name)
     if not os.path.exists(curr_trace_dir):
@@ -100,6 +100,12 @@ def trace_handler(
     torch.distributed.barrier()
 
 
+def _warn(msg: str):
+    _, rank = utils.get_world_size_and_rank()
+    if rank == 0:
+        log.warn(msg)
+
+
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     torch_profiler_cfg = OmegaConf.select(
         cfg, "profiler", default=None, throw_on_missing=False
@@ -123,7 +129,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
 
     # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
     if schedule_cfg is None:
-        log.warn(
+        _warn(
             f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
         )
         schedule_cfg = DEFAULT_SCHEDULE_CFG
@@ -132,7 +138,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
             k in schedule_cfg for k in ["wait", "warmup", "active"]
         ), "Invalid schedule config: must specify wait, warmup, active"
         if "repeat" not in schedule_cfg:
-            log.warn(f" No repeat found in schedule config, setting to 0")
+            _warn(
+                " No repeat found in schedule config, setting to 0 (repeats continuously)."
+            )
             schedule_cfg["repeat"] = 0
 
     schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
@@ -159,7 +167,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         cfg, "output_dir", default=None, throw_on_missing=False
     )
     if profiler_output_dir is None:
-        log.warn(
+        _warn(
             f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
         )
         profiler_output_dir = DEFAULT_PROFILE_DIR
@@ -186,11 +194,4 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         on_trace_ready=callback,
     )
 
-    if torch.distributed.get_rank() == 0:
-        pretty_schedule = {
-            k: v for k, v in schedule_cfg.items() if not k.startswith("_")
-        }
-        log.info(
-            f" Profiler is initialized, activities: {activities}, schedule: {pretty_schedule}, profile_memory: {profiler.profile_memory}, record_shapes: {profiler.record_shapes}, with_stack: {profiler.with_stack}, output_dir: {profiler_output_dir}"
-        )
     return profiler
