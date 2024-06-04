@@ -85,19 +85,19 @@ dtype: bf16
 enable_activation_checkpointing: False
 
 #Profiling
-profile: True
-profiler:
-  _component_: torch.profiler.profile
-  activities:
-    CPU: True
-    CUDA: True
-  record_shapes: True
-  profile_memory: True
+profile:
+  enabled: True
+  CPU: ???
+  CUDA: True
+  profiler:
+    _component_: torch.profiler.profile
+    record_shapes: True
+    profile_memory: True
+    with_stack: True
+    with_flops: True
   schedule:
     _component_: torch.profiler.schedule
     wait: 1
     warmup: 1
     active: 1
     repeat: 1
-  with_stack: True
-  with_flops: True
