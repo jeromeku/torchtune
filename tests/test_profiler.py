@@ -12,7 +12,6 @@ PROFILER_ATTRS = [
     "with_stack",
     "record_shapes",
     "with_flops",
-    "experimental_config",
 ]
 
 
@@ -130,7 +129,7 @@ def test_schedule_setup(profiler_cfg, reference_profiler_basic):
     assert cfg.profile.schedule.repeat == 1
 
 
-def test_defaults_setup(profiler_cfg, reference_profiler_basic):
+def test_defaults_setup(profiler_cfg):
     cfg = OmegaConf.create(profiler_cfg)
 
     from torchtune.utils.profiling_utils import (
@@ -149,3 +148,17 @@ def test_defaults_setup(profiler_cfg, reference_profiler_basic):
         cfg.profile.pop("output_dir")
     profiler = setup_torch_profiler(cfg.profile)
     assert cfg.profile.output_dir == _DEFAULT_PROFILE_DIR
+
+
+def test_instantiate_full(profiler_cfg, reference_profiler_full):
+    cfg = OmegaConf.create(profiler_cfg)
+
+    # Check `setup` automatically overrides `with_stack` and `record_shapes` when profile_memory is True and adds
+    # experimental_config, which is needed for stack exporting (see comments in `setup_torch_profiler`)
+    cfg.profile.profiler.profile_memory = True
+    cfg.profile.profiler.with_stack = False
+    cfg.profile.profiler.record_shapes = False
+    profiler = setup_torch_profiler(cfg.profile)
+
+    check_profiler_attrs(profiler, reference_profiler_full)
+    assert profiler.experimental_config is not None
