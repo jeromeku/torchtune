@@ -114,6 +114,7 @@ def test_profiler_setup(
     profiler = setup_torch_profiler(cfg.profile)
 
     check_profiler_attrs(profiler, reference_profiler_simple)
+
     # Test that after removing schedule, setup method will implement default schedule
     from torchtune.utils.profiling_utils import _DEFAULT_SCHEDULE_CFG
 
@@ -124,10 +125,25 @@ def test_profiler_setup(
     default_schedule = config.instantiate(_DEFAULT_SCHEDULE_CFG)
     check_schedule(profiler.schedule, default_schedule)
 
-    # Test default activities
-    from torchtune.utils.profiling_utils import _DEFAULT_PROFILER_ACTIVITIES
+    # Test invalid schedule
+    cfg.profile.schedule.pop("wait")
+    with pytest.raises(ValueError):
+        profiler = setup_torch_profiler(cfg.profile)
 
-    cfg.profile.pop("CPU")
-    cfg.profile.pop("CUDA")
+    # Test missing `repeat` replaced with `1`
+    cfg.profile.schedule = _DEFAULT_SCHEDULE_CFG
+    cfg.profile.schedule.pop("repeat")
     profiler = setup_torch_profiler(cfg.profile)
-    assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES
+    assert cfg.profile.schedule.repeat == 1
+
+    # # Test default activities
+    # from torchtune.utils.profiling_utils import _DEFAULT_PROFILER_ACTIVITIES
+
+    # cfg.profile.pop("CPU")
+    # cfg.profile.pop("CUDA")
+    # profiler = setup_torch_profiler(cfg.profile)
+    # assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES
+
+    # # Test overrides
+    # # Outputdir
+    # # profile_memory

@@ -19,7 +19,7 @@ from torchtune import config, utils
 
 log = utils.get_logger("INFO")
 
-_DEFAULT_PROFILER_ACTIVITIES ={ 
+_DEFAULT_PROFILER_ACTIVITIES = {
     torch.profiler.ProfilerActivity.CPU,
     torch.profiler.ProfilerActivity.CUDA,
 }
@@ -134,7 +134,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                     active: int
                     repeat: int
             ```
-        Note:
+        Notes:
             - the profiler schedule updates with respect to an optimizer step:
                 - e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
             - sensible defaults will be chosen if the config is missing options
@@ -143,9 +143,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                 - if a schedule is specified, profiler will validate that the schedule is valid and can be passed to `instantiate`
                 - certain options will be overridden (`with_stack` and `record_shapes`) depending on requirements of other options
                     - e.g., `profile_memory` requires `with_stack` and `record_shapes`
-
     Returns:
         torch.profiler.profile
+        **Note that `cfg` is modified in-place with the defaults per the above comment**
     """
     torch_profiler_cfg = cfg.get("profiler", None)
     assert (
@@ -174,11 +174,14 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         )
         schedule_cfg = _DEFAULT_SCHEDULE_CFG
     else:
-        assert all(
-            k in schedule_cfg for k in ["wait", "warmup", "active"]
-        ), "Invalid schedule config: must specify wait, warmup, active"
+        if not all(k in schedule_cfg for k in ["wait", "warmup", "active"]):
+            raise ValueError(
+                "Invalid schedule config: must specify wait, warmup, active"
+            )
         if "repeat" not in schedule_cfg:
-            _warn(" No repeat found in schedule config, setting to 1.")
+            _warn(
+                " No repeat found in schedule config, setting to 1 (one cycle).  If you want to cycle continuously, specify repeat = 0"
+            )
             schedule_cfg["repeat"] = 1
 
     schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
