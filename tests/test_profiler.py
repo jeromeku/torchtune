@@ -3,37 +3,36 @@ from pathlib import Path
 import pytest
 import torch
 from omegaconf import OmegaConf
+from torch._C._profiler import _ExperimentalConfig
 
-import torchtune
 from torchtune import config
 
 FIXTURES_DIR = Path(__file__).parent / "assets"
 
 
-@pytest.fixture
-def valid_profiler_config():
-    return OmegaConf.load(FIXTURES_DIR / "valid_profiler.yaml")
+PROFILER_ATTRS = [
+    "activities",
+    "profile_memory",
+    "with_stack",
+    "record_shapes",
+    "with_flops",
+    "experimental_config",
+]
 
 
 @pytest.fixture
-def invalid_profiler_config():
-    return OmegaConf.load(FIXTURES_DIR / "invalid_profiler.yaml")
-
-
-TEST_PROFILE_CFG = """
+def profiler_cfg():
+    return """
 profile:
   enabled: True
   CPU: True
   CUDA: True
-  #output_dir: ${artifact_dir}/profiling
-  #torch.profiler.profile
   profiler:
     _component_: torch.profiler.profile
     profile_memory: False
-    with_stack: True
-    record_shapes: False
+    with_stack: False
+    record_shapes: True
     with_flops: True
-  #torch.profiler.schedule
   schedule:
     _component_: torch.profiler.schedule
     wait: 3
@@ -43,8 +42,44 @@ profile:
 """
 
 
-def test_valid_profile():
-    cfg = OmegaConf.create(TEST_PROFILE_CFG)
+@pytest.fixture
+def reference_profiler_simple():
+    return torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        schedule=torch.profiler.schedule(wait=3, warmup=1, active=1, repeat=0),
+        profile_memory=False,
+        with_stack=False,
+        record_shapes=True,
+        with_flops=True,
+    )
+
+
+@pytest.fixture
+def reference_profiler_full():
+    return torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        schedule=torch.profiler.schedule(wait=3, warmup=1, active=1, repeat=0),
+        profile_memory=True,
+        with_stack=True,
+        record_shapes=True,
+        with_flops=True,
+        experimental_config=_ExperimentalConfig(verbose=True),
+    )
+
+
+def check_profiler_attrs(profiler, ref_profiler):
+    for attr in PROFILER_ATTRS:
+        assert getattr(profiler, attr) == getattr(ref_profiler, attr)
+
+
+def test_instantiate(profiler_cfg, reference_profiler_simple):
+    cfg = OmegaConf.create(profiler_cfg)
 
     torch_profiler_cfg = cfg.profile.profiler
     schedule_cfg = cfg.profile.schedule
@@ -55,17 +90,6 @@ def test_valid_profile():
     test_actions = [test_schedule(i) for i in range(10)]
     assert ref_actions == test_actions
 
-    ref_profiler = torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CPU,
-            torch.profiler.ProfilerActivity.CUDA,
-        ],
-        schedule=ref_schedule,
-        profile_memory=False,
-        with_stack=True,
-        record_shapes=False,
-        with_flops=True,
-    )
     test_activities = []
     if cfg.profile.CPU:
         test_activities.append(torch.profiler.ProfilerActivity.CPU)
@@ -74,16 +98,20 @@ def test_valid_profile():
     test_profiler = config.instantiate(
         torch_profiler_cfg, activities=test_activities, schedule=test_schedule
     )
-
-    for _attr in [
-        "activities",
-        "profile_memory",
-        "with_stack",
-        "record_shapes",
-        "with_flops",
-    ]:
-        assert getattr(ref_profiler, _attr) == getattr(test_profiler, _attr)
+    check_profiler_attrs(test_profiler, reference_profiler_simple)
 
 
-# # def test_invalid_profile(invalid_profile_config):
-# #     print(invalid_profile_config)
+def test_profiler_setup(
+    profiler_cfg, reference_profiler_simple, reference_profiler_full
+):
+    original_cfg, cfg = [OmegaConf.create(profiler_cfg) for _ in range(2)]
+    from torchtune.utils.profiling_utils import setup_torch_profiler
+
+    profiler = setup_torch_profiler(cfg.profile)
+
+    check_profiler_attrs(profiler, reference_profiler_simple)
+    # Test that after removing schedule, setup method will implement default schedule
+    from torchtune.utils.profiling_utils import DEFAULT_SCHEDULE_CFG
+
+    cfg.profile.pop("schedule")
+    print(cfg)
