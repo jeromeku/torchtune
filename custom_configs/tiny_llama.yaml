@@ -1,0 +1,113 @@
+checkpoint_dir: /home/ubuntu/model_checkpoints
+model_label: tiny_llama
+model_dir: ${checkpoint_dir}/${model_label}
+artifact_dir: ${checkpoint_dir}/${model_label}-outputs
+
+# Model Arguments
+model:
+  _component_: torchtune.models.llama2.lora_llama2_7b
+  lora_attn_modules: ['q_proj', 'v_proj', 'k_proj', 'output_proj']
+  apply_lora_to_mlp: True
+  apply_lora_to_output: False
+  lora_rank: 8
+  lora_alpha: 16
+
+tokenizer:
+  _component_: torchtune.models.llama2.llama2_tokenizer
+  path: ${model_dir}/tokenizer.model
+
+checkpointer:
+  _component_: torchtune.utils.FullModelHFCheckpointer
+  checkpoint_dir: ${checkpoint_dir}/Llama-2-7b-hf
+  checkpoint_files:
+    [pytorch_model-00001-of-00002.bin, pytorch_model-00002-of-00002.bin]
+  adapter_checkpoint: null
+  recipe_checkpoint: null
+  output_dir: ${artifact_dir}/checkpoints
+  model_type: LLAMA2
+resume_from_checkpoint: False
+
+dataset:
+  _component_: torchtune.datasets.instruct_dataset
+  source: json
+  data_files: tests/assets/alpaca_tiny.json
+  template: torchtune.data.AlpacaInstructTemplate
+  split: train
+
+seed: null
+shuffle: True
+batch_size: 2
+
+# Optimizer and Scheduler
+optimizer:
+  _component_: torch.optim.AdamW
+  weight_decay: 0.01
+  lr: 3e-4
+lr_scheduler:
+  _component_: torchtune.modules.get_cosine_schedule_with_warmup
+  num_warmup_steps: 100
+
+loss:
+  _component_: torch.nn.CrossEntropyLoss
+
+# Training
+epochs: 1
+max_steps_per_epoch: 5
+gradient_accumulation_steps: 1
+
+# Logging
+output_dir: ${artifact_dir}/logs
+metric_logger:
+  _component_: torchtune.utils.metric_logging.DiskLogger
+  log_dir: ${output_dir}
+log_every_n_steps: 1
+log_peak_memory_stats: True
+
+# Environment
+device: cuda
+dtype: bf16
+enable_activation_checkpointing: False
+
+#Profiling
+profile:
+  enabled: True
+  #Activities to trace, will be converted to torch.profiler.ProfileActivity in `torchtune.utils.profiling.setup_torch_profiler` 
+  CPU: True
+  CUDA: True
+  #Where to output trace and other profiler artifacts
+  output_dir: ${artifact_dir}/profiling
+  
+  #torch.profiler.profile settings
+  profiler:
+    _component_: torch.profiler.profile
+    profile_memory: False
+    with_stack: False
+    record_shapes: False
+    with_flops: False
+
+  #torch.profiler.schedule
+  schedule:
+    _component_: torch.profiler.schedule
+    wait: 3
+    warmup: 2
+    active: 1
+    repeat: 1
+
+
+# checkpointer:
+#     # checkpointer to use
+#     _component_: torchtune.utils.FullModelHFCheckpointer
+
+#     checkpoint_dir: ${model_dir}
+
+#     checkpoint_files: [
+#         model.safetensors
+#     ]
+
+#     recipe_checkpoint: null
+
+#     output_dir: ${artifact_dir}/trained
+
+#     model_type: LLAMA2
+
+# resume_from_checkpoint: False

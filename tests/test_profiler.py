@@ -162,3 +162,7 @@ def test_instantiate_full(profiler_cfg, reference_profiler_full):
 
     check_profiler_attrs(profiler, reference_profiler_full)
     assert profiler.experimental_config is not None
+
+
+def test_fake_profiler():
+    pass

@@ -109,6 +109,23 @@ def trace_handler(
     torch.distributed.barrier()
 
 
+class FakeProfiler:
+    """
+    Mock object that minimally mimics behavior of torch.profiler.profile
+
+    Essentially a contextlib.nullcontext object with a `step` method
+    """
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        pass
+
+    def step(self):
+        pass
+
+
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     """
     Sets up torch.profiler.profile
@@ -134,19 +151,25 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                     active: int
                     repeat: int
             ```
-        Notes:
-            - the profiler schedule updates with respect to an optimizer step:
-                - e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
-            - sensible defaults will be chosen if the config is missing options
-                - if no activities are specified, profiler will default to CPU + CUDA
-                - if no schedule is specified, profiler will default to wait 10, warmup 5, active 3, repeat 1
-                - if a schedule is specified, profiler will validate that the schedule is valid and can be passed to `instantiate`
-                - certain options will be overridden (`with_stack` and `record_shapes`) depending on requirements of other options
-                    - e.g., `profile_memory` requires `with_stack` and `record_shapes`
     Returns:
-        torch.profiler.profile
-        **Note that `cfg` is modified in-place with the defaults per the above comment**
+        torch.profiler.profile | fake_profiler
+    Notes:
+        - `cfg` is modified in-place with the defaults per the comments below
+        - the profiler schedule updates with respect to an optimizer step:
+            - e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
+        - sensible defaults will be chosen if the config is missing options
+            - if no activities are specified, profiler will default to CPU + CUDA
+            - if no schedule is specified, profiler will default to wait 10, warmup 5, active 3, repeat 1
+            - if a schedule is specified, profiler will validate that the schedule is valid and can be passed to `instantiate`
+            - certain options will be overridden (`with_stack` and `record_shapes`) depending on requirements of other options
+                - e.g., `profile_memory` requires `with_stack` and `record_shapes`
+        - if no profiler config is found or the `cfg.enabled=False`, a fake profiler will be returned that minimally mimicks the interface of torch.profiler.profile (context decorator with `step` method)
     """
+    should_profile = cfg is not None and cfg.get("enabled", True)
+    if not should_profile:
+        return FakeProfiler()
+
+    cfg.enabled = cfg.get("enabled", True)
     torch_profiler_cfg = cfg.get("profiler", None)
     assert (
         torch_profiler_cfg is not None
