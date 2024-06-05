@@ -52,7 +52,7 @@ loss:
 
 # Training
 epochs: 1
-max_steps_per_epoch: 5
+max_steps_per_epoch: 3
 gradient_accumulation_steps: 1
 
 # Logging
@@ -75,12 +75,12 @@ profile:
   CPU: True
   CUDA: True
   #Where to output trace and other profiler artifacts
-  output_dir: ${artifact_dir}/profiling
+  output_dir: tiny_llama_profiles/profile_memory
   
   #torch.profiler.profile settings
   profiler:
     _component_: torch.profiler.profile
-    profile_memory: False
+    profile_memory: True
     with_stack: False
     record_shapes: False
     with_flops: False
@@ -88,8 +88,8 @@ profile:
   #torch.profiler.schedule
   schedule:
     _component_: torch.profiler.schedule
-    wait: 3
-    warmup: 2
+    wait: 0
+    warmup: 1 
     active: 1
     repeat: 1
 

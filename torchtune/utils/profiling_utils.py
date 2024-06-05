@@ -68,28 +68,14 @@ def trace_handler(
     if rank == 0:
         log.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
 
-    # Construct the memory timeline file.
+    # html timeline export only works on rank 0
     if prof.profile_memory:
         try:
             prof.export_memory_timeline(
                 f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
             )
-        except:
-            _warn("Failed to export memory timeline to html, retrying as gzipped json.")
-            try:
-                prof.export_memory_timeline(
-                    f"{curr_trace_dir}/rank{rank}_memory-timeline.json.gz"
-                )
-            except:
-                _warn(
-                    "Failed to export memory timeline to gzipped json. Saving profiler timeline object instead."
-                )
-                from torch.profiler._memory_profiler import MemoryProfileTimeline
-
-                memory_profile = MemoryProfileTimeline(prof._memory_profile())
-                torch.save(
-                    memory_profile, f"{curr_trace_dir}/rank{rank}_memory-timeline.pt"
-                )
+        except Exception:
+            log.warn(" Rank {rank}: Failed to export memory timeline to html")
 
     # Dump stack traces
     if prof.with_stack:
@@ -232,7 +218,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     output_dir.mkdir(parents=True, exist_ok=True)
     callback = partial(trace_handler, output_dir=output_dir)
 
-    # Update profiler cfg
+    # Update profiler cfg in-place
     cfg.output_dir = profiler_output_dir
     cfg.schedule = schedule_cfg
     cfg.profiler.profile_memory = profile_memory

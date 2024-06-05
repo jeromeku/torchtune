@@ -645,7 +645,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
                         prof.step()
 
                 self.epochs_run += 1
-                self.save_checkpoint(epoch=curr_epoch)
+            #  self.save_checkpoint(epoch=curr_epoch)
 
     def cleanup(self) -> None:
         if self._is_rank_zero:
@@ -674,8 +674,8 @@ def recipe_main(cfg: DictConfig) -> None:
 
     recipe = LoRAFinetuneRecipeDistributed(cfg=cfg)
     recipe.setup(cfg=cfg)
-    # recipe.train()
-    # recipe.cleanup()
+    recipe.train()
+    recipe.cleanup()
 
 
 if __name__ == "__main__":
