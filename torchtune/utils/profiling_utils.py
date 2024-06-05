@@ -4,7 +4,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import logging
 import os
 import time
 from functools import partial
@@ -20,15 +19,17 @@ from torchtune import config, utils
 
 log = utils.get_logger("INFO")
 
-# adapted from https://github.com/pytorch/torchtitan
+DEFAULT_PROFILER_ACTIVITIES = [
+    torch.profiler.ProfilerActivity.CPU,
+    torch.profiler.ProfilerActivity.CUDA,
+]
 
-# 10 step cycle: does nothing for 8 steps, warms up for 1, then records for 1
 DEFAULT_SCHEDULE_CFG: dict = {
     "_component_": "torch.profiler.schedule",
-    "wait": 8,
-    "warmup": 1,
-    "active": 1,
-    "repeat": 0,
+    "wait": 10,
+    "warmup": 5,
+    "active": 3,
+    "repeat": 1,
 }
 DEFAULT_PROFILE_DIR: str = "profiler_output"
 
@@ -57,7 +58,7 @@ def trace_handler(
     begin = time.monotonic()
 
     # Use tensorboard trace handler rather than directly exporting chrome traces since
-    # tensorboard doesn't seem to be able to parse traces when with prof.export_chrome_trace
+    # tensorboard doesn't seem to be able to parse traces with prof.export_chrome_trace
     exporter = tensorboard_trace_handler(
         curr_trace_dir, worker_name=f"rank{rank}", use_gzip=True
     )
@@ -132,7 +133,16 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                     active: int
                     repeat: int
             ```
-        Note that the profiler schedule is for an optimizer update step: e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
+        Note:
+            - the profiler schedule updates with respect to an optimizer step:
+                - e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
+            - sensible defaults will be chosen if the config is missing options
+                - if no activities are specified, profiler will default to CPU + CUDA
+                - if no schedule is specified, profiler will default to wait 10, warmup 5, active 3, repeat 1
+                - if a schedule is specified, profiler will validate that the schedule is valid and can be passed to `instantiate`
+                - certain options will be overridden (`with_stack` and `record_shapes`) depending on requirements of other options
+                    - e.g., `profile_memory` requires `with_stack` and `record_shapes`
+
     Returns:
         torch.profiler.profile
     """
@@ -149,7 +159,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         activities.append(torch.profiler.ProfilerActivity.CPU)
     if cfg.CUDA:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
-    assert len(activities) > 0, "At least one profiler activity must be enabled"
+    if len(activities) == 0:
+        _warn("No activities specified, defaulting to CPU + CUDA")
+        activities = DEFAULT_PROFILER_ACTIVITIES
 
     # Set up profiler schedule
     schedule_cfg = OmegaConf.select(
