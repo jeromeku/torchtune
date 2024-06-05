@@ -19,19 +19,20 @@ from torchtune import config, utils
 
 log = utils.get_logger("INFO")
 
-DEFAULT_PROFILER_ACTIVITIES = [
+_DEFAULT_PROFILER_ACTIVITIES = [
     torch.profiler.ProfilerActivity.CPU,
     torch.profiler.ProfilerActivity.CUDA,
 ]
 
-DEFAULT_SCHEDULE_CFG: dict = {
+_DEFAULT_SCHEDULE: dict = {
     "_component_": "torch.profiler.schedule",
     "wait": 10,
     "warmup": 5,
     "active": 3,
     "repeat": 1,
 }
-DEFAULT_PROFILE_DIR: str = "profiler_output"
+_DEFAULT_SCHEDULE_CFG = DictConfig(_DEFAULT_SCHEDULE)
+_DEFAULT_PROFILE_DIR: str = "profiler_output"
 
 
 def _warn(msg: str):
@@ -161,7 +162,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
     if len(activities) == 0:
         _warn("No activities specified, defaulting to CPU + CUDA")
-        activities = DEFAULT_PROFILER_ACTIVITIES
+        activities = _DEFAULT_PROFILER_ACTIVITIES
 
     # Set up profiler schedule
     schedule_cfg = OmegaConf.select(
@@ -171,18 +172,18 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
     if schedule_cfg is None:
         _warn(
-            f" No schedule found in profiler config, loading default schedule {DEFAULT_SCHEDULE_CFG}"
+            f" No schedule found in profiler config, loading default schedule {_DEFAULT_SCHEDULE_CFG}"
         )
-        schedule_cfg = DEFAULT_SCHEDULE_CFG
+        schedule_cfg = _DEFAULT_SCHEDULE_CFG
     else:
         assert all(
             k in schedule_cfg for k in ["wait", "warmup", "active"]
         ), "Invalid schedule config: must specify wait, warmup, active"
         if "repeat" not in schedule_cfg:
             _warn(
-                " No repeat found in schedule config, setting to 0 (repeats continuously)."
+                " No repeat found in schedule config, setting to 1."
             )
-            schedule_cfg["repeat"] = 0
+            schedule_cfg["repeat"] = 1
 
     schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
 
@@ -210,9 +211,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     )
     if profiler_output_dir is None:
         _warn(
-            f" No output directory found in profiler config, defaulting to {DEFAULT_PROFILE_DIR}"
+            f" No output directory found in profiler config, defaulting to {_DEFAULT_PROFILE_DIR}"
         )
-        profiler_output_dir = DEFAULT_PROFILE_DIR
+        profiler_output_dir = _DEFAULT_PROFILE_DIR
 
     output_dir = Path(profiler_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -78,6 +78,12 @@ def check_profiler_attrs(profiler, ref_profiler):
         assert getattr(profiler, attr) == getattr(ref_profiler, attr)
 
 
+def check_schedule(schedule, ref_schedule, num_steps=10):
+    ref_steps = [ref_schedule(i) for i in range(num_steps)]
+    test_steps = [schedule(i) for i in range(num_steps)]
+    assert ref_steps == test_steps
+
+
 def test_instantiate(profiler_cfg, reference_profiler_simple):
     cfg = OmegaConf.create(profiler_cfg)
 
@@ -86,9 +92,7 @@ def test_instantiate(profiler_cfg, reference_profiler_simple):
 
     ref_schedule = torch.profiler.schedule(wait=3, warmup=1, active=1, repeat=0)
     test_schedule = config.instantiate(schedule_cfg)
-    ref_actions = [ref_schedule(i) for i in range(10)]
-    test_actions = [test_schedule(i) for i in range(10)]
-    assert ref_actions == test_actions
+    check_schedule(ref_schedule, test_schedule)
 
     test_activities = []
     if cfg.profile.CPU:
@@ -111,7 +115,11 @@ def test_profiler_setup(
 
     check_profiler_attrs(profiler, reference_profiler_simple)
     # Test that after removing schedule, setup method will implement default schedule
-    from torchtune.utils.profiling_utils import DEFAULT_SCHEDULE_CFG
+    from torchtune.utils.profiling_utils import _DEFAULT_SCHEDULE_CFG
 
     cfg.profile.pop("schedule")
-    print(cfg)
+    profiler = setup_torch_profiler(cfg.profile)
+    assert cfg.profile.schedule == _DEFAULT_SCHEDULE_CFG
+
+    default_schedule = config.instantiate(_DEFAULT_SCHEDULE_CFG)
+    check_schedule(profiler.schedule, default_schedule)
