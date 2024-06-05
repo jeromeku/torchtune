@@ -1,14 +1,10 @@
-from pathlib import Path
-
 import pytest
 import torch
 from omegaconf import OmegaConf
 from torch._C._profiler import _ExperimentalConfig
 
 from torchtune import config
-
-FIXTURES_DIR = Path(__file__).parent / "assets"
-
+from torchtune.utils.profiling_utils import setup_torch_profiler
 
 PROFILER_ATTRS = [
     "activities",
@@ -43,7 +39,7 @@ profile:
 
 
 @pytest.fixture
-def reference_profiler_simple():
+def reference_profiler_basic():
     return torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
@@ -105,15 +101,12 @@ def test_instantiate(profiler_cfg, reference_profiler_simple):
     check_profiler_attrs(test_profiler, reference_profiler_simple)
 
 
-def test_profiler_setup(
-    profiler_cfg, reference_profiler_simple, reference_profiler_full
-):
-    original_cfg, cfg = [OmegaConf.create(profiler_cfg) for _ in range(2)]
-    from torchtune.utils.profiling_utils import setup_torch_profiler
+def test_schedule_setup(profiler_cfg, reference_profiler_basic):
+    cfg = OmegaConf.create(profiler_cfg)
 
     profiler = setup_torch_profiler(cfg.profile)
 
-    check_profiler_attrs(profiler, reference_profiler_simple)
+    check_profiler_attrs(profiler, reference_profiler_basic)
 
     # Test that after removing schedule, setup method will implement default schedule
     from torchtune.utils.profiling_utils import _DEFAULT_SCHEDULE_CFG
@@ -136,14 +129,23 @@ def test_profiler_setup(
     profiler = setup_torch_profiler(cfg.profile)
     assert cfg.profile.schedule.repeat == 1
 
-    # # Test default activities
-    # from torchtune.utils.profiling_utils import _DEFAULT_PROFILER_ACTIVITIES
 
-    # cfg.profile.pop("CPU")
-    # cfg.profile.pop("CUDA")
-    # profiler = setup_torch_profiler(cfg.profile)
-    # assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES
+def test_defaults_setup(profiler_cfg, reference_profiler_basic):
+    cfg = OmegaConf.create(profiler_cfg)
 
-    # # Test overrides
-    # # Outputdir
-    # # profile_memory
+    from torchtune.utils.profiling_utils import (
+        _DEFAULT_PROFILE_DIR,
+        _DEFAULT_PROFILER_ACTIVITIES,
+    )
+
+    # Test setup automatically adds CPU + CUDA tracing if neither CPU nor CUDA is specified
+    cfg.profile.pop("CPU")
+    cfg.profile.pop("CUDA")
+    profiler = setup_torch_profiler(cfg.profile)
+    assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES
+
+    # Test cfg output_dir is set correctly
+    if not OmegaConf.is_missing(cfg, "profile.output_dir"):
+        cfg.profile.pop("output_dir")
+    profiler = setup_torch_profiler(cfg.profile)
+    assert cfg.profile.output_dir == _DEFAULT_PROFILE_DIR
