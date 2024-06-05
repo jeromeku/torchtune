@@ -123,3 +123,11 @@ def test_profiler_setup(
 
     default_schedule = config.instantiate(_DEFAULT_SCHEDULE_CFG)
     check_schedule(profiler.schedule, default_schedule)
+
+    # Test default activities
+    from torchtune.utils.profiling_utils import _DEFAULT_PROFILER_ACTIVITIES
+
+    cfg.profile.pop("CPU")
+    cfg.profile.pop("CUDA")
+    profiler = setup_torch_profiler(cfg.profile)
+    assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES

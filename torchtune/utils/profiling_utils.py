@@ -19,10 +19,10 @@ from torchtune import config, utils
 
 log = utils.get_logger("INFO")
 
-_DEFAULT_PROFILER_ACTIVITIES = [
+_DEFAULT_PROFILER_ACTIVITIES ={ 
     torch.profiler.ProfilerActivity.CPU,
     torch.profiler.ProfilerActivity.CUDA,
-]
+}
 
 _DEFAULT_SCHEDULE: dict = {
     "_component_": "torch.profiler.schedule",
@@ -114,7 +114,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     Sets up torch.profiler.profile
 
     Args:
-        cfg (DictConfig): profiler config with expected structure:
+        cfg (DictConfig): profiler config with expected structure, with "profile" assumed as root:
             ```
             profile:
                 output_dir: str
@@ -147,27 +147,25 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     Returns:
         torch.profiler.profile
     """
-    torch_profiler_cfg = OmegaConf.select(
-        cfg, "profiler", default=None, throw_on_missing=False
-    )
+    torch_profiler_cfg = cfg.get("profiler", None)
     assert (
         torch_profiler_cfg is not None
     ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
 
     # Set up profiler activities
     activities = []
-    if cfg.CPU:
+    profile_cpu = cfg.get("CPU", False)
+    profile_cuda = cfg.get("CUDA", False)
+    if profile_cpu:
         activities.append(torch.profiler.ProfilerActivity.CPU)
-    if cfg.CUDA:
+    if profile_cuda:
         activities.append(torch.profiler.ProfilerActivity.CUDA)
     if len(activities) == 0:
         _warn("No activities specified, defaulting to CPU + CUDA")
         activities = _DEFAULT_PROFILER_ACTIVITIES
 
     # Set up profiler schedule
-    schedule_cfg = OmegaConf.select(
-        cfg, "schedule", default=None, throw_on_missing=False
-    )
+    schedule_cfg = cfg.get("schedule", None)
 
     # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
     if schedule_cfg is None:
@@ -180,35 +178,24 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
             k in schedule_cfg for k in ["wait", "warmup", "active"]
         ), "Invalid schedule config: must specify wait, warmup, active"
         if "repeat" not in schedule_cfg:
-            _warn(
-                " No repeat found in schedule config, setting to 1."
-            )
+            _warn(" No repeat found in schedule config, setting to 1.")
             schedule_cfg["repeat"] = 1
 
     schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
 
-    profile_memory = OmegaConf.select(
-        torch_profiler_cfg, "profile_memory", default=False
-    )
+    profile_memory = torch_profiler_cfg.get("profile_memory", False)
 
     # profile_memory requires with_stack and record_shapes, hence we override these if profile_memory is True
     # See torch.profiler.profiler._memory_profile
-    with_stack = (
-        OmegaConf.select(torch_profiler_cfg, "with_stack", default=False)
-        or profile_memory
-    )
-    record_shapes = (
-        OmegaConf.select(torch_profiler_cfg, "record_shapes", default=False)
-        or profile_memory
-    )
+    with_stack = torch_profiler_cfg.get("with_stack", False) or profile_memory
+    record_shapes = torch_profiler_cfg.get("record_shapes", False) or profile_memory
 
     # experimental config is needed to export stacks: see https://github.com/pytorch/pytorch/issues/100253
     experimental_config = _ExperimentalConfig(verbose=True) if with_stack else None
 
     # Handle exporting of trace, memory timeline and other profiler artifacts
-    profiler_output_dir = OmegaConf.select(
-        cfg, "output_dir", default=None, throw_on_missing=False
-    )
+    profiler_output_dir = cfg.get("output_dir", None)
+
     if profiler_output_dir is None:
         _warn(
             f" No output directory found in profiler config, defaulting to {_DEFAULT_PROFILE_DIR}"
