@@ -89,7 +89,8 @@ dtype: bf16
 enable_activation_checkpointing: False
 
 #Profiling
-profile:
+#Use with `torchtune.utils.setup_torch_profiler`
+profiler:
   enabled: True
   #Activities to trace, will be converted to torch.profiler.ProfileActivity in `torchtune.utils.profiling.setup_torch_profiler` 
   CPU: True
@@ -98,8 +99,7 @@ profile:
   output_dir: ${artifact_dir}/profiling_outputs
   
   #torch.profiler.profile settings
-  profiler:
-    _component_: torch.profiler.profile
+  profile:
     profile_memory: True
     with_stack: False
     record_shapes: False
@@ -107,7 +107,6 @@ profile:
 
   #torch.profiler.schedule
   schedule:
-    _component_: torch.profiler.schedule
     wait: 1
     warmup: 1 
     active: 1

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch._C._profiler import _ExperimentalConfig
 from torch.profiler import tensorboard_trace_handler
 
@@ -19,6 +19,7 @@ from torchtune import config, utils
 
 log = utils.get_logger("INFO")
 
+_PROFILER_KEY = "profiler"
 _DEFAULT_PROFILER_ACTIVITIES = {
     torch.profiler.ProfilerActivity.CPU,
     torch.profiler.ProfilerActivity.CUDA,
@@ -121,7 +122,9 @@ class FakeProfiler:
 
 
 def should_profile(cfg: DictConfig) -> bool:
-    return cfg.get("profile", None) is not None and cfg.profile.get("enabled", True)
+    return cfg.get(_PROFILER_KEY, None) is not None and cfg[_PROFILER_KEY].get(
+        "enabled", True
+    )
 
 
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
@@ -133,12 +136,12 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     Args:
         cfg (DictConfig): profiler config with following options:
             ```
-            profile:
+            profiler:
                 output_dir: str
                 CPU: bool
                 CUDA: bool
 
-                profiler:
+                profile:
                     _component_: torch.profiler.profile
                     profile_memory: bool
                     with_stack: bool
@@ -152,7 +155,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                     repeat: int
             ```
     Returns:
-        torch.profiler.profile | fake_profiler
+        torch.profiler.profile | FakeProfiler
     Notes:
         - `cfg` is modified in-place with the defaults per the comments below
         - the profiler schedule updates with respect to an optimizer step:
@@ -170,20 +173,20 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     if not should_profile(cfg):
         return FakeProfiler()
 
-    cfg.profile.enabled = cfg.profile.get("enabled", True)
-    torch_profiler_cfg = cfg.profile.get("profiler", None)
+    cfg[_PROFILER_KEY].enabled = cfg[_PROFILER_KEY].get("enabled", True)
+    torch_profiler_cfg = cfg[_PROFILER_KEY].get("profile", None)
     if torch_profiler_cfg is None:
         _warn(
             f" Missing torch profiler config, instantiating with default settings: {_DEFAULT_PROFILER_OPTS}"
         )
-        cfg.profile.profiler = torch_profiler_cfg = DictConfig(
-            {"_component_": "torch.profiler.profile", **_DEFAULT_PROFILER_OPTS}
+        cfg[_PROFILER_KEY].profile = torch_profiler_cfg = OmegaConf.create(
+            _DEFAULT_PROFILER_OPTS
         )
 
     # Set up profiler activities
     activities = []
-    profile_cpu = cfg.profile.get("CPU", False)
-    profile_cuda = cfg.profile.get("CUDA", False)
+    profile_cpu = cfg[_PROFILER_KEY].get("CPU", False)
+    profile_cuda = cfg[_PROFILER_KEY].get("CUDA", False)
     if profile_cpu:
         activities.append(torch.profiler.ProfilerActivity.CPU)
     if profile_cuda:
@@ -193,7 +196,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         activities = _DEFAULT_PROFILER_ACTIVITIES
 
     # Set up profiler schedule
-    schedule_cfg = cfg.profile.get("schedule", None)
+    schedule_cfg = cfg[_PROFILER_KEY].get("schedule", None)
 
     # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
     if schedule_cfg is None:
@@ -238,7 +241,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     experimental_config = _ExperimentalConfig(verbose=True) if with_stack else None
 
     # Handle exporting of trace, memory timeline and other profiler artifacts
-    profiler_output_dir = cfg.profile.get("output_dir", None)
+    profiler_output_dir = cfg[_PROFILER_KEY].get("output_dir", None)
 
     if profiler_output_dir is None:
         _warn(
@@ -251,18 +254,18 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     callback = partial(trace_handler, output_dir=output_dir)
 
     # Update profiler cfg in-place
-    cfg.profile.output_dir = profiler_output_dir
-    cfg.profile.schedule = schedule_cfg
-    cfg.profile.profiler.profile_memory = profile_memory
-    cfg.profile.profiler.with_stack = with_stack
-    cfg.profile.profiler.record_shapes = record_shapes
-    cfg.profile.profiler.with_flops = with_flops
+    cfg[_PROFILER_KEY].output_dir = profiler_output_dir
+    cfg[_PROFILER_KEY].schedule = schedule_cfg
+    cfg[_PROFILER_KEY].profile.profile_memory = profile_memory
+    cfg[_PROFILER_KEY].profile.with_stack = with_stack
+    cfg[_PROFILER_KEY].profile.record_shapes = record_shapes
+    cfg[_PROFILER_KEY].profile.with_flops = with_flops
 
     if "_component_" not in torch_profiler_cfg:
-        cfg.profile.profiler["_component_"] = "torch.profiler.profile"
+        cfg[_PROFILER_KEY].profile["_component_"] = "torch.profiler.profile"
 
     profiler = config.instantiate(
-        cfg.profile.profiler,
+        cfg[_PROFILER_KEY].profile,
         activities=activities,
         schedule=schedule,
         experimental_config=experimental_config,

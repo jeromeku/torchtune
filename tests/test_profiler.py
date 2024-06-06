@@ -24,18 +24,18 @@ PROFILER_ATTRS = [
 @pytest.fixture
 def profiler_cfg():
     return """
-profile:
+profiler:
   enabled: True
   CPU: True
   CUDA: True
-  profiler:
-    _component_: torch.profiler.profile
+  profile:
+    # _component_: torch.profiler.profile
     profile_memory: False
     with_stack: False
     record_shapes: True
     with_flops: True
   schedule:
-    _component_: torch.profiler.schedule
+    # _component_: torch.profiler.schedule
     wait: 3
     warmup: 1
     active: 1
@@ -88,17 +88,21 @@ def check_schedule(schedule, ref_schedule, num_steps=10):
 def test_instantiate(profiler_cfg, reference_profiler_basic):
     cfg = OmegaConf.create(profiler_cfg)
 
-    torch_profiler_cfg = cfg.profile.profiler
-    schedule_cfg = cfg.profile.schedule
+    torch_profiler_cfg = cfg.profiler.profile
+    if "_component_" not in torch_profiler_cfg:
+        torch_profiler_cfg["_component_"] = "torch.profiler.profile"
+    schedule_cfg = cfg.profiler.schedule
+    if "_component_" not in schedule_cfg:
+        schedule_cfg["_component_"] = "torch.profiler.schedule"
 
     ref_schedule = torch.profiler.schedule(wait=3, warmup=1, active=1, repeat=0)
     test_schedule = config.instantiate(schedule_cfg)
     check_schedule(ref_schedule, test_schedule)
 
     test_activities = []
-    if cfg.profile.CPU:
+    if cfg.profiler.CPU:
         test_activities.append(torch.profiler.ProfilerActivity.CPU)
-    if cfg.profile.CUDA:
+    if cfg.profiler.CUDA:
         test_activities.append(torch.profiler.ProfilerActivity.CUDA)
     test_profiler = config.instantiate(
         torch_profiler_cfg, activities=test_activities, schedule=test_schedule
@@ -111,9 +115,9 @@ def test_instantiate_full(profiler_cfg, reference_profiler_full):
 
     # Check `setup` automatically overrides `with_stack` and `record_shapes` when profile_memory is True and adds
     # experimental_config, which is needed for stack exporting (see comments in `setup_torch_profiler`)
-    cfg.profile.profiler.profile_memory = True
-    cfg.profile.profiler.with_stack = False
-    cfg.profile.profiler.record_shapes = False
+    cfg.profiler.profile.profile_memory = True
+    cfg.profiler.profile.with_stack = False
+    cfg.profiler.profile.record_shapes = False
     profiler = setup_torch_profiler(cfg)
 
     check_profiler_attrs(profiler, reference_profiler_full)
@@ -130,23 +134,23 @@ def test_schedule_setup(profiler_cfg, reference_profiler_basic):
     # Test that after removing schedule, setup method will implement default schedule
     from torchtune.utils.profiling_utils import _DEFAULT_SCHEDULE_CFG
 
-    cfg.profile.pop("schedule")
+    cfg.profiler.pop("schedule")
     profiler = setup_torch_profiler(cfg)
-    assert cfg.profile.schedule == _DEFAULT_SCHEDULE_CFG
+    assert cfg.profiler.schedule == _DEFAULT_SCHEDULE_CFG
 
     default_schedule = config.instantiate(_DEFAULT_SCHEDULE_CFG)
     check_schedule(profiler.schedule, default_schedule)
 
     # Test invalid schedule
-    cfg.profile.schedule.pop("wait")
+    cfg.profiler.schedule.pop("wait")
     with pytest.raises(ValueError):
         profiler = setup_torch_profiler(cfg)
 
     # Test missing `repeat` replaced with `1`
-    cfg.profile.schedule = _DEFAULT_SCHEDULE_CFG
-    cfg.profile.schedule.pop("repeat")
+    cfg.profiler.schedule = _DEFAULT_SCHEDULE_CFG
+    cfg.profiler.schedule.pop("repeat")
     profiler = setup_torch_profiler(cfg)
-    assert cfg.profile.schedule.repeat == 1
+    assert cfg.profiler.schedule.repeat == 1
 
 
 def test_defaults_setup(profiler_cfg):
@@ -159,19 +163,19 @@ def test_defaults_setup(profiler_cfg):
     )
 
     # Test setup automatically adds CPU + CUDA tracing if neither CPU nor CUDA is specified
-    cfg.profile.pop("CPU")
-    cfg.profile.pop("CUDA")
+    cfg.profiler.pop("CPU")
+    cfg.profiler.pop("CUDA")
     profiler = setup_torch_profiler(cfg)
     assert profiler.activities == _DEFAULT_PROFILER_ACTIVITIES
 
     # Test cfg output_dir is set correctly
     if not OmegaConf.is_missing(cfg, "profile.output_dir"):
-        cfg.profile.pop("output_dir")
+        cfg.profiler.pop("output_dir")
     profiler = setup_torch_profiler(cfg)
-    assert cfg.profile.output_dir == _DEFAULT_PROFILE_DIR
+    assert cfg.profiler.output_dir == _DEFAULT_PROFILE_DIR
 
     # Test missing profiler options are set to defaults
-    torch_profiler_cfg = cfg.profile.profiler
+    torch_profiler_cfg = cfg.profiler.profile
     torch_profiler_cfg.pop("profile_memory")
     torch_profiler_cfg.pop("with_stack")
     torch_profiler_cfg.pop("record_shapes")
@@ -183,20 +187,20 @@ def test_defaults_setup(profiler_cfg):
     assert torch_profiler_cfg.with_flops == _DEFAULT_PROFILER_OPTS["with_flops"]
 
     # Test missing torch profiler entirely
-    cfg.profile.pop("profiler")
+    cfg.profiler.pop("profile")
     profiler = setup_torch_profiler(cfg)
-    assert cfg.profile.profiler is not None
-    assert cfg.profile.profiler == OmegaConf.create(
+    assert cfg.profiler.profile is not None
+    assert cfg.profiler.profile == OmegaConf.create(
         {"_component_": "torch.profiler.profile", **_DEFAULT_PROFILER_OPTS}
     )
 
 
 def test_fake_profiler(profiler_cfg):
-    from torchtune.utils.profiling_utils import FakeProfiler
+    from torchtune.utils.profiling_utils import _PROFILER_KEY, FakeProfiler
 
     # Test that disabled profiler creates fake profiler
     cfg = OmegaConf.create(profiler_cfg)
-    cfg.profile.enabled = False
+    cfg.profiler.enabled = False
 
     profiler = setup_torch_profiler(cfg)
     assert isinstance(profiler, FakeProfiler)
@@ -205,6 +209,7 @@ def test_fake_profiler(profiler_cfg):
     assert profiler.step() is None
 
     # Test missing `profile` key returns fake profiler
-    cfg.pop("profile")
+
+    cfg.pop(_PROFILER_KEY)
     profiler = setup_torch_profiler(cfg)
     assert isinstance(profiler, FakeProfiler)
