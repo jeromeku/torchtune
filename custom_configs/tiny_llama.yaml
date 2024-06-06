@@ -28,15 +28,22 @@ checkpointer:
 resume_from_checkpoint: False
 
 dataset:
-  _component_: torchtune.datasets.instruct_dataset
-  source: json
-  data_files: tests/assets/alpaca_tiny.json
-  template: torchtune.data.AlpacaInstructTemplate
-  split: train
-
+  _component_: torchtune.datasets.alpaca_cleaned_dataset
+  train_on_input: True
 seed: null
 shuffle: True
 batch_size: 2
+
+# dataset:
+#   _component_: torchtune.datasets.instruct_dataset
+#   source: json
+#   data_files: tests/assets/alpaca_tiny.json
+#   template: torchtune.data.AlpacaInstructTemplate
+#   split: train
+
+# seed: null
+# shuffle: True
+# batch_size: 2
 
 # Optimizer and Scheduler
 optimizer:
@@ -75,7 +82,7 @@ profile:
   CPU: True
   CUDA: True
   #Where to output trace and other profiler artifacts
-  output_dir: tiny_llama_profiles/profile_memory
+  output_dir: tiny_llama_profiles/alpaca
   
   #torch.profiler.profile settings
   profiler:

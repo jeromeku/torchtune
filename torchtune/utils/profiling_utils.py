@@ -26,10 +26,15 @@ _DEFAULT_PROFILER_ACTIVITIES = {
 
 _DEFAULT_SCHEDULE: dict = {
     "_component_": "torch.profiler.schedule",
-    "wait": 10,
+    "wait": 100,
     "warmup": 5,
-    "active": 3,
+    "active": 5,
     "repeat": 1,
+}
+_DEFAULT_PROFILER_OPTS: dict = {
+    "profile_memory": False,
+    "with_stack": False,
+    "record_shapes": True,
 }
 _DEFAULT_SCHEDULE_CFG = DictConfig(_DEFAULT_SCHEDULE)
 _DEFAULT_PROFILE_DIR: str = "profiler_output"
@@ -68,14 +73,15 @@ def trace_handler(
     if rank == 0:
         log.info(f"Finished dumping traces in {time.monotonic() - begin:.2f} seconds")
 
-    # html timeline export only works on rank 0
+    # Memory timeline sometimes fails to export
     if prof.profile_memory:
-        try:
-            prof.export_memory_timeline(
-                f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
-            )
-        except Exception:
-            log.warn(" Rank {rank}: Failed to export memory timeline to html")
+        if rank == 0:
+            try:
+                prof.export_memory_timeline(
+                    f"{curr_trace_dir}/rank{rank}_memory-timeline.html"
+                )
+            except Exception as e:
+                log.warn(f" Failed to export memory timeline: {e}")
 
     # Dump stack traces
     if prof.with_stack:
@@ -115,6 +121,8 @@ class FakeProfiler:
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     """
     Sets up torch.profiler.profile
+
+    NOTE: Enabling the profiler may have training speed reduction.
 
     Args:
         cfg (DictConfig): profiler config with expected structure, with "profile" assumed as root:
@@ -195,12 +203,20 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
 
     schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
 
-    profile_memory = torch_profiler_cfg.get("profile_memory", False)
+    profile_memory = torch_profiler_cfg.get(
+        "profile_memory", _DEFAULT_PROFILER_OPTS["profile_memory"]
+    )
 
     # profile_memory requires with_stack and record_shapes, hence we override these if profile_memory is True
     # See torch.profiler.profiler._memory_profile
-    with_stack = torch_profiler_cfg.get("with_stack", False) or profile_memory
-    record_shapes = torch_profiler_cfg.get("record_shapes", False) or profile_memory
+    with_stack = (
+        torch_profiler_cfg.get("with_stack", _DEFAULT_PROFILER_OPTS["with_stack"])
+        or profile_memory
+    )
+    record_shapes = (
+        torch_profiler_cfg.get("record_shapes", _DEFAULT_PROFILER_OPTS["record_shapes"])
+        or profile_memory
+    )
 
     # experimental config is needed to export stacks: see https://github.com/pytorch/pytorch/issues/100253
     experimental_config = _ExperimentalConfig(verbose=True) if with_stack else None
