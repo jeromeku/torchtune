@@ -212,13 +212,13 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     if schedule_cfg is None:
         world_size, _ = utils.get_world_size_and_rank()
         if world_size > 1:
-            _DEFAULT_SCHEDULE_CFG = _DEFAULT_SCHEDULE_CFG_DISTRIBUTED
+            default_schedule_cfg = _DEFAULT_SCHEDULE_CFG_DISTRIBUTED
         else:
-            _DEFAULT_SCHEDULE_CFG = _DEFAULT_SCHEDULE_CFG_SINGLE
+            default_schedule_cfg = _DEFAULT_SCHEDULE_CFG_SINGLE
         _warn(
-            f" No schedule found in profiler config, loading default schedule {_DEFAULT_SCHEDULE_CFG}"
+            f" No schedule found in profiler config, loading default schedule {default_schedule_cfg}"
         )
-        schedule_cfg = _DEFAULT_SCHEDULE_CFG
+        schedule_cfg = default_schedule_cfg
     else:
         if not all(k in schedule_cfg for k in ["wait", "warmup", "active"]):
             raise ValueError(

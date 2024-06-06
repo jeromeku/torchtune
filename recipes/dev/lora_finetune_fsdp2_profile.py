@@ -22,7 +22,6 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
-from tqdm import tqdm
 
 from torchtune import config, modules, utils
 from torchtune.datasets import ConcatDataset
@@ -40,6 +39,7 @@ from torchtune.utils.profiling_utils import (
     setup_torch_profiler,
     should_profile,
 )
+from tqdm import tqdm
 
 log = utils.get_logger("DEBUG")
 

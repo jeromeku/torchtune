@@ -88,7 +88,7 @@ def check_schedule(schedule, ref_schedule, num_steps=10):
     assert ref_steps == test_steps
 
 
-def test_instantiate(profiler_cfg, reference_profiler_basic):
+def test_instantiate_basic(profiler_cfg, reference_profiler_basic):
     cfg = OmegaConf.create(profiler_cfg)
 
     torch_profiler_cfg = cfg[PROFILER_KEY].profile
@@ -215,7 +215,7 @@ def test_default_profiler(profiler_cfg):
 
 
 def test_fake_profiler(profiler_cfg):
-    from torchtune.utils.profiling_utils import PROFILER_KEY, FakeProfiler
+    from torchtune.utils.profiling_utils import FakeProfiler, PROFILER_KEY
 
     # Test that disabled profiler creates fake profiler
     cfg = OmegaConf.create(profiler_cfg)
