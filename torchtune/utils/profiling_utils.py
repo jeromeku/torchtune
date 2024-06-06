@@ -176,7 +176,14 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
             ```
     Returns:
         torch.profiler.profile | FakeProfiler
-    Notes:
+
+    IMPORTANT:
+        Profiling memory adds significant overhead to the overhead already introduced by profiling 
+        and will impact the total training time as well as result in large trace files.
+        The profiling schedule should be set accordingly to minimize this impact 
+        (I.e. wait 10, warmup 5, active 1, repeat 1)
+    
+    Additional notes:
         - `cfg` is modified in-place with the defaults per the comments below
         - the profiler schedule updates with respect to an optimizer step:
             - e.g., if `gradient_accumulation = 2`, then the profiler will step every 2 batches.
