@@ -1,3 +1,9 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -5,8 +11,6 @@ from torch._C._profiler import _ExperimentalConfig
 
 from torchtune import config
 from torchtune.utils.profiling_utils import setup_torch_profiler
-
-# Test fixtures
 
 PROFILER_ATTRS = [
     "activities",
@@ -81,7 +85,6 @@ def check_schedule(schedule, ref_schedule, num_steps=10):
     assert ref_steps == test_steps
 
 
-# Tests
 def test_instantiate(profiler_cfg, reference_profiler_basic):
     cfg = OmegaConf.create(profiler_cfg)
 
