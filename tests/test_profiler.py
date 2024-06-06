@@ -6,6 +6,8 @@ from torch._C._profiler import _ExperimentalConfig
 from torchtune import config
 from torchtune.utils.profiling_utils import setup_torch_profiler
 
+## Test fixtures
+
 PROFILER_ATTRS = [
     "activities",
     "profile_memory",
@@ -79,7 +81,8 @@ def check_schedule(schedule, ref_schedule, num_steps=10):
     assert ref_steps == test_steps
 
 
-def test_instantiate(profiler_cfg, reference_profiler_simple):
+## Tests
+def test_instantiate(profiler_cfg, reference_profiler_basic):
     cfg = OmegaConf.create(profiler_cfg)
 
     torch_profiler_cfg = cfg.profile.profiler
@@ -97,7 +100,21 @@ def test_instantiate(profiler_cfg, reference_profiler_simple):
     test_profiler = config.instantiate(
         torch_profiler_cfg, activities=test_activities, schedule=test_schedule
     )
-    check_profiler_attrs(test_profiler, reference_profiler_simple)
+    check_profiler_attrs(test_profiler, reference_profiler_basic)
+
+
+def test_instantiate_full(profiler_cfg, reference_profiler_full):
+    cfg = OmegaConf.create(profiler_cfg)
+
+    # Check `setup` automatically overrides `with_stack` and `record_shapes` when profile_memory is True and adds
+    # experimental_config, which is needed for stack exporting (see comments in `setup_torch_profiler`)
+    cfg.profile.profiler.profile_memory = True
+    cfg.profile.profiler.with_stack = False
+    cfg.profile.profiler.record_shapes = False
+    profiler = setup_torch_profiler(cfg.profile)
+
+    check_profiler_attrs(profiler, reference_profiler_full)
+    assert profiler.experimental_config is not None
 
 
 def test_schedule_setup(profiler_cfg, reference_profiler_basic):
@@ -135,6 +152,7 @@ def test_defaults_setup(profiler_cfg):
     from torchtune.utils.profiling_utils import (
         _DEFAULT_PROFILE_DIR,
         _DEFAULT_PROFILER_ACTIVITIES,
+        _DEFAULT_PROFILER_OPTS,
     )
 
     # Test setup automatically adds CPU + CUDA tracing if neither CPU nor CUDA is specified
@@ -149,19 +167,17 @@ def test_defaults_setup(profiler_cfg):
     profiler = setup_torch_profiler(cfg.profile)
     assert cfg.profile.output_dir == _DEFAULT_PROFILE_DIR
 
-
-def test_instantiate_full(profiler_cfg, reference_profiler_full):
-    cfg = OmegaConf.create(profiler_cfg)
-
-    # Check `setup` automatically overrides `with_stack` and `record_shapes` when profile_memory is True and adds
-    # experimental_config, which is needed for stack exporting (see comments in `setup_torch_profiler`)
-    cfg.profile.profiler.profile_memory = True
-    cfg.profile.profiler.with_stack = False
-    cfg.profile.profiler.record_shapes = False
+    # Test missing profiler options are set to defaults
+    torch_profiler_cfg = cfg.profile.profiler
+    torch_profiler_cfg.pop("profile_memory")
+    torch_profiler_cfg.pop("with_stack")
+    torch_profiler_cfg.pop("record_shapes")
+    torch_profiler_cfg.pop("with_flops")
     profiler = setup_torch_profiler(cfg.profile)
-
-    check_profiler_attrs(profiler, reference_profiler_full)
-    assert profiler.experimental_config is not None
+    assert torch_profiler_cfg.profile_memory == _DEFAULT_PROFILER_OPTS["profile_memory"]
+    assert torch_profiler_cfg.with_stack == _DEFAULT_PROFILER_OPTS["with_stack"]
+    assert torch_profiler_cfg.record_shapes == _DEFAULT_PROFILER_OPTS["record_shapes"]
+    assert torch_profiler_cfg.with_flops == _DEFAULT_PROFILER_OPTS["with_flops"]
 
 
 def test_fake_profiler():

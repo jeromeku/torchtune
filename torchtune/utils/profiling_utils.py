@@ -11,7 +11,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from torch._C._profiler import _ExperimentalConfig
 from torch.profiler import tensorboard_trace_handler
 
@@ -35,6 +35,7 @@ _DEFAULT_PROFILER_OPTS: dict = {
     "profile_memory": False,
     "with_stack": False,
     "record_shapes": True,
+    "with_flops": False,
 }
 _DEFAULT_SCHEDULE_CFG = DictConfig(_DEFAULT_SCHEDULE)
 _DEFAULT_PROFILE_DIR: str = "profiler_output"
@@ -157,7 +158,8 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
             - if a schedule is specified, profiler will validate that the schedule is valid and can be passed to `instantiate`
             - certain options will be overridden (`with_stack` and `record_shapes`) depending on requirements of other options
                 - e.g., `profile_memory` requires `with_stack` and `record_shapes`
-        - if no profiler config is found or the `cfg.enabled=False`, a fake profiler will be returned that minimally mimicks the interface of torch.profiler.profile (context decorator with `step` method)
+        - if no profiler config is found or the `cfg.enabled=False`, a fake profiler will be returned that
+        minimally mimicks the interface of torch.profiler.profile (context decorator with `step` method)
     """
     should_profile = cfg is not None and cfg.get("enabled", True)
     if not should_profile:
@@ -197,7 +199,8 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
             )
         if "repeat" not in schedule_cfg:
             _warn(
-                " No repeat found in schedule config, setting to 1 (one cycle).  If you want to cycle continuously, specify repeat = 0"
+                """ No repeat found in schedule config, setting to 1 (one cycle).
+                If you want to cycle continuously, specify repeat = 0"""
             )
             schedule_cfg["repeat"] = 1
 
@@ -216,6 +219,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     record_shapes = (
         torch_profiler_cfg.get("record_shapes", _DEFAULT_PROFILER_OPTS["record_shapes"])
         or profile_memory
+    )
+    with_flops = torch_profiler_cfg.get(
+        "with_flops", _DEFAULT_PROFILER_OPTS["with_flops"]
     )
 
     # experimental config is needed to export stacks: see https://github.com/pytorch/pytorch/issues/100253
@@ -240,6 +246,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     cfg.profiler.profile_memory = profile_memory
     cfg.profiler.with_stack = with_stack
     cfg.profiler.record_shapes = record_shapes
+    cfg.profiler.with_flops = with_flops
 
     profiler = config.instantiate(
         torch_profiler_cfg,
@@ -248,6 +255,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         profile_memory=profile_memory,
         with_stack=with_stack,
         record_shapes=record_shapes,
+        with_flops=with_flops,
         experimental_config=experimental_config,
         on_trace_ready=callback,
     )
