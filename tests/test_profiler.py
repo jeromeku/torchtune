@@ -182,7 +182,7 @@ def test_default_output_dir(profiler_cfg):
     from torchtune.utils.profiling_utils import _DEFAULT_PROFILE_DIR
 
     # Test cfg output_dir is set correctly
-    if not OmegaConf.is_missing(cfg, "profile.output_dir"):
+    if cfg[PROFILER_KEY].get("output_dir", None) is not None:
         cfg[PROFILER_KEY].pop("output_dir")
     _profiler = setup_torch_profiler(cfg)
     assert cfg[PROFILER_KEY].output_dir == _DEFAULT_PROFILE_DIR
