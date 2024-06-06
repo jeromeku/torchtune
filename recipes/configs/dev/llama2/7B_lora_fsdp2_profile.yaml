@@ -72,7 +72,7 @@ loss:
 
 # Training
 epochs: 1
-max_steps_per_epoch: 10
+max_steps_per_epoch: 3
 gradient_accumulation_steps: 2
 
 # Logging
@@ -108,7 +108,7 @@ profile:
   #torch.profiler.schedule
   schedule:
     _component_: torch.profiler.schedule
-    wait: 2
-    warmup: 2 
+    wait: 1
+    warmup: 1 
     active: 1
     repeat: 1

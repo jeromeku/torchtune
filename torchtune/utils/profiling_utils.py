@@ -25,7 +25,7 @@ _DEFAULT_PROFILER_ACTIVITIES = {
 }
 
 _DEFAULT_SCHEDULE: dict = {
-    "_component_": "torch.profiler.schedule",
+    # "_component_": "torch.profiler.schedule",
     "wait": 100,
     "warmup": 5,
     "active": 5,
@@ -53,7 +53,7 @@ def trace_handler(
     metric="self_cuda_time_total",
     row_limit=-1,
 ):
-    _, rank = utils.get_world_size_and_rank()
+    world_size, rank = utils.get_world_size_and_rank()
     curr_trace_dir_name = "iteration_" + str(prof.step_num)
     curr_trace_dir = os.path.join(output_dir, curr_trace_dir_name)
     if not os.path.exists(curr_trace_dir):
@@ -99,7 +99,8 @@ def trace_handler(
 
     # TODO: Is this necessary?
     # see https://github.com/pytorch/torchtitan/blob/3050098dcee4901d88c712f9e8e9703d1735a29b/torchtitan/profiling.py#L48
-    torch.distributed.barrier()
+    if world_size > 1:
+        torch.distributed.barrier()
 
 
 class FakeProfiler:
@@ -119,6 +120,10 @@ class FakeProfiler:
         pass
 
 
+def should_profile(cfg: DictConfig) -> bool:
+    return cfg.get("profile", None) is not None and cfg.profile.get("enabled", True)
+
+
 def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     """
     Sets up torch.profiler.profile
@@ -126,7 +131,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     NOTE: Enabling the profiler may have training speed reduction.
 
     Args:
-        cfg (DictConfig): profiler config with expected structure, with "profile" assumed as root:
+        cfg (DictConfig): profiler config with following options:
             ```
             profile:
                 output_dir: str
@@ -161,24 +166,24 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         - if no profiler config is found or the `cfg.enabled=False`, a fake profiler will be returned that
         minimally mimicks the interface of torch.profiler.profile (context decorator with `step` method)
     """
-    should_profile = cfg is not None and cfg.get("enabled", True)
-    if not should_profile:
+
+    if not should_profile(cfg):
         return FakeProfiler()
 
-    cfg.enabled = cfg.get("enabled", True)
-    torch_profiler_cfg = cfg.get("profiler", None)
+    cfg.profile.enabled = cfg.profile.get("enabled", True)
+    torch_profiler_cfg = cfg.profile.get("profiler", None)
     if torch_profiler_cfg is None:
         _warn(
             f" Missing torch profiler config, instantiating with default settings: {_DEFAULT_PROFILER_OPTS}"
         )
-        cfg.profiler = torch_profiler_cfg = DictConfig(
+        cfg.profile.profiler = torch_profiler_cfg = DictConfig(
             {"_component_": "torch.profiler.profile", **_DEFAULT_PROFILER_OPTS}
         )
 
     # Set up profiler activities
     activities = []
-    profile_cpu = cfg.get("CPU", False)
-    profile_cuda = cfg.get("CUDA", False)
+    profile_cpu = cfg.profile.get("CPU", False)
+    profile_cuda = cfg.profile.get("CUDA", False)
     if profile_cpu:
         activities.append(torch.profiler.ProfilerActivity.CPU)
     if profile_cuda:
@@ -188,7 +193,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
         activities = _DEFAULT_PROFILER_ACTIVITIES
 
     # Set up profiler schedule
-    schedule_cfg = cfg.get("schedule", None)
+    schedule_cfg = cfg.profile.get("schedule", None)
 
     # Use default schedule if None, else validate that schedule is valid and can be passed to `instantiate`
     if schedule_cfg is None:
@@ -207,8 +212,9 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
                 If you want to cycle continuously, specify repeat = 0"""
             )
             schedule_cfg["repeat"] = 1
-
-    schedule = config.instantiate(schedule_cfg) if schedule_cfg is not None else None
+    if "_component_" not in schedule_cfg:
+        schedule_cfg["_component_"] = "torch.profiler.schedule"
+    schedule = config.instantiate(schedule_cfg)
 
     profile_memory = torch_profiler_cfg.get(
         "profile_memory", _DEFAULT_PROFILER_OPTS["profile_memory"]
@@ -232,7 +238,7 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     experimental_config = _ExperimentalConfig(verbose=True) if with_stack else None
 
     # Handle exporting of trace, memory timeline and other profiler artifacts
-    profiler_output_dir = cfg.get("output_dir", None)
+    profiler_output_dir = cfg.profile.get("output_dir", None)
 
     if profiler_output_dir is None:
         _warn(
@@ -245,23 +251,33 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     callback = partial(trace_handler, output_dir=output_dir)
 
     # Update profiler cfg in-place
-    cfg.output_dir = profiler_output_dir
-    cfg.schedule = schedule_cfg
-    cfg.profiler.profile_memory = profile_memory
-    cfg.profiler.with_stack = with_stack
-    cfg.profiler.record_shapes = record_shapes
-    cfg.profiler.with_flops = with_flops
+    cfg.profile.output_dir = profiler_output_dir
+    cfg.profile.schedule = schedule_cfg
+    cfg.profile.profiler.profile_memory = profile_memory
+    cfg.profile.profiler.with_stack = with_stack
+    cfg.profile.profiler.record_shapes = record_shapes
+    cfg.profile.profiler.with_flops = with_flops
+
+    if "_component_" not in torch_profiler_cfg:
+        cfg.profile.profiler["_component_"] = "torch.profiler.profile"
 
     profiler = config.instantiate(
-        torch_profiler_cfg,
+        cfg.profile.profiler,
         activities=activities,
         schedule=schedule,
-        profile_memory=profile_memory,
-        with_stack=with_stack,
-        record_shapes=record_shapes,
-        with_flops=with_flops,
         experimental_config=experimental_config,
         on_trace_ready=callback,
     )
+    # profiler = config.instantiate(
+    #     {"_component_": "torch.profiler.profile"},
+    #     activities=activities,
+    #     schedule=schedule,
+    #     profile_memory=profile_memory,
+    #     with_stack=with_stack,
+    #     record_shapes=record_shapes,
+    #     with_flops=with_flops,
+    #     experimental_config=experimental_config,
+    #     on_trace_ready=callback,
+    # )
 
     return profiler

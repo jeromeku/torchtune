@@ -13,7 +13,7 @@ from warnings import warn
 
 import torch
 import torch.distributed
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch import nn
 from torch.distributed import destroy_process_group, init_process_group
 from torch.distributed._composable.fsdp import fully_shard
@@ -22,6 +22,7 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
 
 from torchtune import config, modules, utils
 from torchtune.datasets import ConcatDataset
@@ -34,8 +35,7 @@ from torchtune.modules.peft.peft_utils import (
     validate_state_dict_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.utils.profiling_utils import setup_torch_profiler
-from tqdm import tqdm
+from torchtune.utils.profiling_utils import setup_torch_profiler, should_profile
 
 log = utils.get_logger("DEBUG")
 
@@ -259,12 +259,12 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         )
 
         # Set up profiler
-        profiler_cfg = cfg.get("profile", None)
-
-        self._profiler = setup_torch_profiler(profiler_cfg)
-        if self._is_rank_zero:
-            if profiler_cfg and profiler_cfg.enabled:
-                log.info(f" Profiler instantiated with following config: {cfg.profile}")
+        self._profiler_enabled = should_profile(cfg)
+        self._profiler = setup_torch_profiler(cfg)
+        if self._is_rank_zero and should_profile:
+            log.info(
+                f" Profiler instantiated with following config: {OmegaConf.resolve(cfg.profile)}"
+            )
 
     def _setup_model(
         self,

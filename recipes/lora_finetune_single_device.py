@@ -7,17 +7,17 @@
 import os
 import sys
 import time
-
 from functools import partial
 from typing import Any, Dict, Optional, Tuple
 from warnings import warn
 
 import torch
 from omegaconf import DictConfig, ListConfig
-
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+
 from torchtune import config, modules, utils
 from torchtune.datasets import ConcatDataset
 from torchtune.modules.peft.peft_utils import (
@@ -28,7 +28,7 @@ from torchtune.modules.peft.peft_utils import (
     validate_missing_and_unexpected_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from tqdm import tqdm
+from torchtune.utils.profiling_utils import setup_torch_profiler, should_profile
 
 log = utils.get_logger("DEBUG")
 
@@ -97,7 +97,6 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
     """
 
     def __init__(self, cfg: DictConfig) -> None:
-
         self._device = utils.get_device(device=cfg.device)
         # Reduced precision logic
         self._dtype = utils.get_dtype(cfg.dtype, device=self._device)
@@ -243,8 +242,11 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
             last_epoch=self.global_step - 1,
         )
 
-        self._profiler_enabled = cfg.profiler.enabled
-        self._profiler = config.instantiate(cfg.profiler)
+        self._profiler_enabled = should_profile(cfg)
+        # Returns a fake profiling context if profiling is not enabled
+        self._profiler = setup_torch_profiler(cfg)
+        if self._profiler_enabled:
+            log.info(f" Profiler is initialized with {cfg.profile}")
 
     def _setup_model(
         self,
