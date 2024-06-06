@@ -12,8 +12,6 @@ Included features:
 - Works in both single device and distributed settings 
 - API is identical to that of current `torchtune` profiler such that the only change required is to use `setup_torch_profiler` to instantiate the profiler.
   
-## Tests
-
 ## Usage
 
 To use, add the following section to the `config` yaml and pass the top-level `args` to `torchtune.utils._profiler.setup_torch_profiler` within the `recipe.setup` section.
@@ -88,4 +86,8 @@ profiler:
     In addition to the previous outputs, additional memory usage info will be recorded and a viewable [memory timeline](https://pytorch.org/docs/stable/profiler.html#torch.profiler._KinetoProfile.export_memory_timeline) will be exported as well.
 
     Each trace will be marked with the `rank` of the process.
-    
+
+
+## Tests
+
+See `tests/test_profiler.py` for unit testing of profiler instantiation with `torchtune.config` as well as the expected functionality of `torchtune.utils.setup_torch_profiler`.
