@@ -6,7 +6,7 @@ from torch._C._profiler import _ExperimentalConfig
 from torchtune import config
 from torchtune.utils.profiling_utils import setup_torch_profiler
 
-## Test fixtures
+# Test fixtures
 
 PROFILER_ATTRS = [
     "activities",
@@ -81,7 +81,7 @@ def check_schedule(schedule, ref_schedule, num_steps=10):
     assert ref_steps == test_steps
 
 
-## Tests
+# Tests
 def test_instantiate(profiler_cfg, reference_profiler_basic):
     cfg = OmegaConf.create(profiler_cfg)
 
@@ -179,6 +179,29 @@ def test_defaults_setup(profiler_cfg):
     assert torch_profiler_cfg.record_shapes == _DEFAULT_PROFILER_OPTS["record_shapes"]
     assert torch_profiler_cfg.with_flops == _DEFAULT_PROFILER_OPTS["with_flops"]
 
+    # Test missing torch profiler entirely
+    cfg.profile.pop("profiler")
+    profiler = setup_torch_profiler(cfg.profile)
+    assert cfg.profile.profiler is not None
+    assert cfg.profile.profiler == OmegaConf.create(
+        {"_component_": "torch.profiler.profile", **_DEFAULT_PROFILER_OPTS}
+    )
 
-def test_fake_profiler():
-    pass
+
+def test_fake_profiler(profiler_cfg):
+    from torchtune.utils.profiling_utils import FakeProfiler
+
+    # Test that disabled profiler creates fake profiler
+    cfg = OmegaConf.create(profiler_cfg)
+    cfg.profile.enabled = False
+
+    profiler = setup_torch_profiler(cfg.profile)
+    assert isinstance(profiler, FakeProfiler)
+
+    # Test that fake_profiler.step() does nothing
+    assert profiler.step() is None
+
+    # Test missing `profile` key returns fake profiler
+    cfg.pop("profile")
+    profiler = setup_torch_profiler(cfg.get("profile", None))
+    assert isinstance(profiler, FakeProfiler)

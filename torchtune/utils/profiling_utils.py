@@ -167,9 +167,13 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
 
     cfg.enabled = cfg.get("enabled", True)
     torch_profiler_cfg = cfg.get("profiler", None)
-    assert (
-        torch_profiler_cfg is not None
-    ), "Missing torch profiler config, please make sure to include a valid profiler config under the 'profile.profiler' key"
+    if torch_profiler_cfg is None:
+        _warn(
+            f" Missing torch profiler config, instantiating with default settings: {_DEFAULT_PROFILER_OPTS}"
+        )
+        cfg.profiler = torch_profiler_cfg = DictConfig(
+            {"_component_": "torch.profiler.profile", **_DEFAULT_PROFILER_OPTS}
+        )
 
     # Set up profiler activities
     activities = []
