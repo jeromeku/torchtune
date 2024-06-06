@@ -35,7 +35,11 @@ from torchtune.modules.peft.peft_utils import (
     validate_state_dict_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.utils.profiling_utils import setup_torch_profiler, should_profile
+from torchtune.utils.profiling_utils import (
+    PROFILER_KEY,
+    setup_torch_profiler,
+    should_profile,
+)
 
 log = utils.get_logger("DEBUG")
 
@@ -263,7 +267,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         self._profiler = setup_torch_profiler(cfg)
         if self._is_rank_zero and should_profile:
             log.info(
-                f" Profiler instantiated with following config: {OmegaConf.resolve(cfg.profile)}"
+                f" Profiler instantiated with following config: {OmegaConf.resolve(cfg[PROFILER_KEY])}"
             )
 
     def _setup_model(

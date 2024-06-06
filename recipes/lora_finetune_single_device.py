@@ -28,7 +28,11 @@ from torchtune.modules.peft.peft_utils import (
     validate_missing_and_unexpected_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.utils.profiling_utils import setup_torch_profiler, should_profile
+from torchtune.utils.profiling_utils import (
+    _PROFILER_KEY,
+    setup_torch_profiler,
+    should_profile,
+)
 
 log = utils.get_logger("DEBUG")
 
@@ -246,7 +250,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         # Returns a fake profiling context if profiling is not enabled
         self._profiler = setup_torch_profiler(cfg)
         if self._profiler_enabled:
-            log.info(f" Profiler is initialized with {cfg.profile}")
+            log.info(f" Profiler is initialized with {cfg[_PROFILER_KEY]}")
 
     def _setup_model(
         self,
