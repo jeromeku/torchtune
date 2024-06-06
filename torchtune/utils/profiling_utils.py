@@ -144,25 +144,35 @@ def setup_torch_profiler(cfg: DictConfig) -> torch.profiler.profile:
     NOTE: Enabling the profiler may have training speed reduction.
 
     Args:
-        cfg (DictConfig): profiler config with following options:
-            ```
-            profiler:
-                output_dir: str
-                CPU: bool
-                CUDA: bool
+        cfg (DictConfig): profiler config with following options:    
+        ```
+        profiler:
+            enabled: bool
 
-                profile:
-                    _component_: torch.profiler.profile
-                    profile_memory: bool
-                    with_stack: bool
-                    record_shapes: bool
-                    with_flops: bool
-                schedule:
-                    _component_: torch.profiler.schedule
-                    wait: int
-                    warmup: int
-                    active: int
-                    repeat: int
+            #Output directory of trace artifacts
+            output_dir: str
+
+            #`torch.profiler.ProfilerActivity` types to trace
+            CPU: bool
+            CUDA: bool
+
+            #`torch.profiler.profile` options
+            profile:
+                # _component_ is optional as the setup method will handle
+                _component_: torch.profiler.profile
+                profile_memory: bool
+                with_stack: bool
+                record_shapes: bool
+                with_flops: bool
+            
+            #`torch.profiler.schedule` options
+            schedule:
+                # _component_ is optional as the setup method will handle
+                _component_: torch.profiler.schedule
+                wait: int
+                warmup: int
+                active: int
+                repeat: int
             ```
     Returns:
         torch.profiler.profile | FakeProfiler
