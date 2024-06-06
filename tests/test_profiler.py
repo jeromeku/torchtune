@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 from unittest.mock import patch
 
 import pytest
@@ -27,21 +28,21 @@ PROFILER_ATTRS = [
 def profiler_cfg():
     return """
 profiler:
-  enabled: True
-  CPU: True
-  CUDA: True
-  profile:
-    # _component_: torch.profiler.profile
-    profile_memory: False
-    with_stack: False
-    record_shapes: True
-    with_flops: True
-  schedule:
-    # _component_: torch.profiler.schedule
-    wait: 3
-    warmup: 1
-    active: 1
-    repeat: 0
+ enabled: True
+ CPU: True
+ CUDA: True
+ profile:
+   # _component_: torch.profiler.profile
+   profile_memory: False
+   with_stack: False
+   record_shapes: True
+   with_flops: True
+ schedule:
+   # _component_: torch.profiler.schedule
+   wait: 3
+   warmup: 1
+   active: 1
+   repeat: 0
 """
 
 
@@ -127,34 +128,27 @@ def test_instantiate_full(profiler_cfg, reference_profiler_full):
 
 
 def test_schedule_setup(profiler_cfg, reference_profiler_basic):
-    from torchtune.utils import get_world_size_and_rank
     from torchtune.utils.profiling_utils import (
         _DEFAULT_SCHEDULE_CFG_DISTRIBUTED,
         _DEFAULT_SCHEDULE_CFG_SINGLE,
     )
 
     cfg = OmegaConf.create(profiler_cfg)
-
     profiler = setup_torch_profiler(cfg)
-
     check_profiler_attrs(profiler, reference_profiler_basic)
 
     # Test that after removing schedule, setup method will implement default schedule
 
-    with mock(
-        "torchtune.utils.get_world_size_and_rank",
-        wraps=get_world_size_and_rank,
-        return_value=(1, 0),
-    ):
+    with patch("torchtune.utils.get_world_size_and_rank") as mock_world_size_and_rank:
+        mock_world_size_and_rank.return_value = (1, 0)
+
         cfg[PROFILER_KEY].pop("schedule")
         profiler = setup_torch_profiler(cfg)
         assert cfg[PROFILER_KEY].schedule == _DEFAULT_SCHEDULE_CFG_SINGLE
 
-    with mock(
-        "torchtune.utils.get_world_size_and_rank",
-        wraps=get_world_size_and_rank,
-        return_value=(2, 0),
-    ):
+    with patch("torchtune.utils.get_world_size_and_rank") as mock_world_size_and_rank:
+        mock_world_size_and_rank.return_value = (2, 0)
+
         cfg[PROFILER_KEY].pop("schedule")
         profiler = setup_torch_profiler(cfg)
         assert cfg[PROFILER_KEY].schedule == _DEFAULT_SCHEDULE_CFG_DISTRIBUTED
