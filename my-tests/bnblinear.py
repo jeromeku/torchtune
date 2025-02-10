@@ -1,9 +1,14 @@
 import math
+import time
 from contextlib import contextmanager
 
 import bitsandbytes as bnb
+import bitsandbytes.functional as bnb_functional
 import torch
+import torch.distributed as dist
 import torch.nn as nn
+from torch.distributed._composable.fsdp import fully_shard
+from torch.distributed.tensor import DTensor
 from torchao.dtypes.nf4tensor import NF4Tensor, linear_nf4, to_nf4
 
 from torchtune.modules import FeedForward
@@ -257,9 +262,9 @@ def test_lora_llama2_mlp(dim=DIM, lora_rank=RANK, lora_alpha=ALPHA, quant_type="
     lora_mlp = lora_llama2_mlp(dim=dim, hidden_dim=hidden_dim, lora_rank=lora_rank, lora_alpha=lora_alpha, quant_type=quant_type, dtype=dtype)
     print(f"lora_mlp {lora_mlp}")
 
-def print_params(module):
+def print_params(module, rank0_only=False):
     for name, param in module.named_parameters():
-        print(f"{name}: {type(param)} {param.shape} {param.dtype} {param.device}")
+        dist_print(f"{name}: {type(param)} {param.shape} {param.dtype} {param.device}", rank0_only=rank0_only)
 
 @contextmanager
 def dtype_context(dtype):
@@ -268,26 +273,86 @@ def dtype_context(dtype):
     yield
     torch.set_default_dtype(original_dtype)
 
-if __name__ == "__main__":
+def dist_print(*msg, delay=.5, rank0_only=False):
+    if dist.is_initialized():
+        rank = dist.get_rank()
+    else:
+        rank = 0
+    if rank0_only and rank != 0:
+        return
+    time.sleep(delay * rank)
+    print(f"[rank{rank}]", *msg, flush=True)
+
+@contextmanager
+def dist_context():
+    dist.init_process_group("nccl")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    torch.cuda.set_device(rank)
+    dist_print(f"rank {rank} of {world_size} initialized")
+    yield
+    dist.barrier()
+    dist.destroy_process_group()
+
+def print_tensor(name, tensor, rank0_only=False):
+    dist_print(f"{name}: {type(tensor)} {tensor.shape} {tensor.dtype} {tensor.device}", rank0_only=rank0_only)
+def main():
     dim = DIM
     hidden_dim = scale_hidden_dim_for_mlp(dim)
     quant_type = "nf4"
     rank = RANK
     alpha = ALPHA
     dtype = torch.bfloat16
-    quantization_kwargs = {"compute_dtype": dtype, "quant_storage": dtype, "compress_statistics": True}
+    quantization_kwargs = { "quant_storage": dtype, "compress_statistics": True}
+    
     with dtype_context(dtype), torch.device("cuda"):
-        # print("nf4")
+        dist_print("nf4", rank0_only=True)
         with torch.device("cuda"):
             nf4_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="nf4")
-        print_params(nf4_linear)
+        print_tensor("nf4_linear", nf4_linear.linear.weight, rank0_only=True)
+        # print_params(nf4_linear, rank0_only=True)
         # print()
         # print("bnb")
-        
-        with torch.device("meta"):
+        dist_print("bnb", rank0_only=True)
+        original_weight = nf4_linear.linear.weight.get_original_weight().clone().detach()
+        print_tensor("original_weight", original_weight, rank0_only=True)
+        with torch.device("cuda"):
             bnb_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="bnb", **quantization_kwargs)
-        new_weight = bnb.nn.Params4bit(data=nf4_linear.linear.weight, **quantization_kwargs)
+        new_weight = bnb.nn.Params4bit(data=original_weight, **quantization_kwargs)
         bnb_linear.linear.weight = new_weight
         bnb_linear.to("cuda")
-        breakpoint()
-        print_params(bnb_linear)
+        #print_params(bnb_linear, rank0_only=True)
+        print_tensor("bnb_linear", bnb_linear.linear.weight, rank0_only=True)
+        # dq = bnb_functional.dequantize_4bit(bnb_linear.linear.weight, bnb_linear.linear.weight.quant_state, quant_type="nf4")
+        # print(dq.shape, dq.dtype, dq.device)
+        # diff = (dq - original_weight).abs().max()
+        # print(f"diff: {diff}")
+
+        dist.barrier()
+        dist_print("fully_shard", rank0_only=True)
+        print_tensor("nf4 original weight", nf4_linear.linear.weight, rank0_only=True)
+        fully_shard(nf4_linear)
+        #print_params(nf4_linear, rank0_only=True)
+        dist_weight: DTensor = nf4_linear.linear.weight
+        #local_nf4_weight = dist_weight.to_local()
+        full_nf4_weight = dist_weight.full_tensor()
+        #print_tensor("nf4 local_nf4_weight", local_nf4_weight, rank0_only=True)
+        print_tensor("nf4 full_nf4_weight", full_nf4_weight, rank0_only=True)
+        print_tensor("nf4 dist_weight", dist_weight, rank0_only=True)
+
+        dist.barrier()
+        dist_print("fully_shard bnb", rank0_only=True)
+        print_tensor("bnb original weight", bnb_linear.linear.weight, rank0_only=True)
+
+        fully_shard(bnb_linear)
+        #print_params(bnb_linear, rank0_only=True)
+        dist_weight: DTensor = bnb_linear.linear.weight
+        local_bnb_weight = dist_weight.to_local()
+        full_bnb_weight = dist_weight.full_tensor()
+        print_tensor("bnb local_bnb_weight", local_bnb_weight, rank0_only=True)
+        print_tensor("bnb full_bnb_weight", full_bnb_weight, rank0_only=True)
+
+
+if __name__ == "__main__":
+    with dist_context():
+        main()
