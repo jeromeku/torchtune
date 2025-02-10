@@ -1,4 +1,5 @@
 import math
+from contextlib import contextmanager
 
 import bitsandbytes as bnb
 import torch
@@ -7,7 +8,7 @@ from torchao.dtypes.nf4tensor import NF4Tensor, linear_nf4, to_nf4
 
 from torchtune.modules import FeedForward
 from torchtune.modules.low_precision import FrozenNF4Linear
-from torchtune.modules.peft import LoRALinear
+from torchtune.modules.peft import LoRALinear as OriginalLoRALinear
 from torchtune.training.seed import set_seed
 
 SEED = 42
@@ -60,34 +61,6 @@ def _lora_b_init_params(x: nn.Linear) -> None:
     nn.init.zeros_(x.weight)
 
 class LoRALinear(nn.Module):
-    """LoRA linear layer as introduced in `LoRA: Low-Rank Adaptation of Large Language Models <https://arxiv.org/abs/2106.09685>`_.
-
-    LoRA perturbs a given layer via a low-rank approximation where only
-    the rank decomposition matrices are trainable. In a linear layer instead of
-    :math:`x \\mapsto W_0x` a LoRALinear layer is defined as
-    :math:`x \\mapsto W_0x + (\\alpha / r)BAx`, where :math:`r` is the rank of
-    the matrices :math:`A` and :math:`B` and :math:`\\alpha` is a scaling factor.
-    As in the original implementation, we support dropout before multiplication
-    by the low-rank matrices.
-
-    Args:
-        in_dim (int): input dimension
-        out_dim (int): output dimension
-        rank (int): rank of the low-rank approximation
-        alpha (float): scaling factor for the low-rank approximation
-        dropout (float): dropout probability. Default: 0.0
-        use_bias (bool): whether to include bias in the original linear layer.
-            Default: False
-        quantize_base (bool): Whether to quantize base linear weight or not.
-            Default: False
-        **quantization_kwargs: Keyword arguments to pass to `to_nf4` when quantizing the base linear weight.
-            Examples of valid arguments are `block_size` and `scaler_block_size`, which control the granularity of
-            weight quantization and scaler quantization respectively. This is only used if `quantize_base` is True.
-            Default None
-
-    Raises:
-        ValueError: If ``quantize_base`` is False, but quantization kwargs are provided.
-    """
 
     def __init__(
         self,
@@ -99,8 +72,9 @@ class LoRALinear(nn.Module):
         use_bias: bool = False,
         quantize_base: bool = True,
         quant_type: str = "nf4",
-        device: str = "cuda",
-        dtype: torch.dtype = torch.bfloat16,
+        dtype = None,
+        # device: str = "cuda",
+        # dtype: torch.dtype = torch.bfloat16,
         **quantization_kwargs,
     ):
         super().__init__()
@@ -117,23 +91,24 @@ class LoRALinear(nn.Module):
                 f"``quantize_base`` is False, but received the following quantization arguments: {quantization_kwargs}"
             )
 
+        dtype = dtype or torch.get_default_dtype()
         if self._quantize_base:
             if quant_type == "nf4":
-                self.linear = FrozenNF4Linear(in_dim, out_dim, bias=use_bias, device=device, dtype=dtype, **quantization_kwargs)
+                self.linear = FrozenNF4Linear(in_dim, out_dim, bias=use_bias, dtype=dtype, **quantization_kwargs)
             elif quant_type == "bnb":
-                self.linear = bnb.nn.LinearNF4(in_dim, out_dim, bias=use_bias, compute_dtype=dtype, quant_storage=dtype, device=device, **quantization_kwargs)
+                self.linear = bnb.nn.LinearNF4(in_dim, out_dim, bias=use_bias, **quantization_kwargs)
             else:
                 raise ValueError(f"Unsupported quant_type: {quant_type}")
         else:
-            self.linear = nn.Linear(in_features=in_dim, out_features=out_dim, bias=self.use_bias, device=device, dtype=dtype)
+            self.linear = nn.Linear(in_features=in_dim, out_features=out_dim, bias=self.use_bias, dtype=dtype)
 
         # 'self.disabled' is a flag showing whether to turn off LoRA adapters,
         # this can be used in DPO for treating the lora adapters as the policy model
         # and disabling it to treat the base model as the reference model
         self.disabled = False
         self.dropout = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
-        self.lora_a = nn.Linear(in_features=in_dim, out_features=rank, bias=False)
-        self.lora_b = nn.Linear(in_features=rank, out_features=out_dim, bias=False)
+        self.lora_a = nn.Linear(in_features=in_dim, out_features=rank, bias=False, dtype=dtype)
+        self.lora_b = nn.Linear(in_features=rank, out_features=out_dim, bias=False, dtype=dtype)
         self.merged = False
         self.initialize_parameters()
 
@@ -185,8 +160,13 @@ def lora_llama2_mlp(
     lora_alpha: float,
     lora_dropout: float = 0.0,
     quantize_base: bool = True,
-    adapter_cls = LoRALinear,
+    use_original = False,
+    quant_type="nf4",
 ) -> FeedForward:
+    if use_original:
+        adapter_cls = OriginalLoRALinear
+    else:
+        adapter_cls = LoRALinear
     gate_proj = adapter_cls(
         in_dim=dim,
         out_dim=hidden_dim,
@@ -194,6 +174,7 @@ def lora_llama2_mlp(
         alpha=lora_alpha,
         dropout=lora_dropout,
         quantize_base=quantize_base,
+        quant_type=quant_type,
     )
     down_proj = adapter_cls(
         in_dim=hidden_dim,
@@ -271,10 +252,42 @@ def test_nf4_bnb_linear(dim=DIM, dtype=torch.bfloat16):
     assert torch.allclose(err_bnb, err_native, 1.0e-2, 1.0e-2)
 
 
-def test_lora_llama2_mlp():
-    hidden_dim = scale_hidden_dim_for_mlp(DIM)
-    lora_mlp = lora_llama2_mlp(dim=DIM, hidden_dim=hidden_dim, lora_rank=RANK, lora_alpha=ALPHA)
+def test_lora_llama2_mlp(dim=DIM, lora_rank=RANK, lora_alpha=ALPHA, quant_type="nf4", dtype=torch.bfloat16):
+    hidden_dim = scale_hidden_dim_for_mlp(dim)
+    lora_mlp = lora_llama2_mlp(dim=dim, hidden_dim=hidden_dim, lora_rank=lora_rank, lora_alpha=lora_alpha, quant_type=quant_type, dtype=dtype)
     print(f"lora_mlp {lora_mlp}")
 
+def print_params(module):
+    for name, param in module.named_parameters():
+        print(f"{name}: {type(param)} {param.shape} {param.dtype} {param.device}")
+
+@contextmanager
+def dtype_context(dtype):
+    original_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    yield
+    torch.set_default_dtype(original_dtype)
+
 if __name__ == "__main__":
-    test_lora_llama2_mlp()
+    dim = DIM
+    hidden_dim = scale_hidden_dim_for_mlp(dim)
+    quant_type = "nf4"
+    rank = RANK
+    alpha = ALPHA
+    dtype = torch.bfloat16
+    quantization_kwargs = {"compute_dtype": dtype, "quant_storage": dtype, "compress_statistics": True}
+    with dtype_context(dtype), torch.device("cuda"):
+        # print("nf4")
+        with torch.device("cuda"):
+            nf4_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="nf4")
+        print_params(nf4_linear)
+        # print()
+        # print("bnb")
+        
+        with torch.device("meta"):
+            bnb_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="bnb", **quantization_kwargs)
+        new_weight = bnb.nn.Params4bit(data=nf4_linear.linear.weight, **quantization_kwargs)
+        bnb_linear.linear.weight = new_weight
+        bnb_linear.to("cuda")
+        breakpoint()
+        print_params(bnb_linear)
