@@ -8,7 +8,8 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed._composable.fsdp import fully_shard
-from torch.distributed.tensor import DTensor
+from torch.distributed.tensor import DeviceMesh, DTensor
+from torch.distributed.tensor.debug import CommDebugMode
 from torchao.dtypes.nf4tensor import NF4Tensor, linear_nf4, to_nf4
 
 from torchtune.modules import FeedForward
@@ -31,7 +32,7 @@ VOCAB_SIZE = 50
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 SEED = 16
-NUM_LAYERS = 3
+NUM_LAYERS = 2
 
 def scale_hidden_dim_for_mlp(dim: int, multiple_of: int = 256) -> int:
     """Scale hidden dimension for MLP to keep number of parameters and computation constant.
@@ -49,7 +50,6 @@ def scale_hidden_dim_for_mlp(dim: int, multiple_of: int = 256) -> int:
     # Round hidden dimension to nearest multiple of `multiple_of`
     hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
     return hidden_dim
-
 
 
 def _lora_a_init_params(x: nn.Linear) -> None:
@@ -297,6 +297,20 @@ def dist_context():
 def print_tensor(name, tensor, rank0_only=False):
     dist_print(f"{name}: {type(tensor)} {tensor.shape} {tensor.dtype} {tensor.device}", rank0_only=rank0_only)
 
+class SimpleLinear(nn.Module):
+    def __init__(self, dim, num_layers):
+        super().__init__()
+        self.layers = torch.nn.ModuleList()
+        for layer in range(num_layers):
+            in_features = dim if layer == 0 else 2 * dim
+            out_features = dim if layer == num_layers - 1 else 2 * dim
+            self.layers.append(torch.nn.Linear(in_features, out_features, bias=False))
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
 def main():
     dim = DIM
     hidden_dim = scale_hidden_dim_for_mlp(dim)
@@ -305,54 +319,44 @@ def main():
     alpha = ALPHA
     dtype = torch.bfloat16
     quantization_kwargs = { "quant_storage": dtype, "compress_statistics": True}
-    
+    # device_mesh = DeviceMesh("cuda", torch.arange(dist.get_world_size()), mesh_dim_names=("dp",)) 
+    # dist_print(device_mesh)
+
+    comm_mode = CommDebugMode()
     with dtype_context(dtype), torch.device("cuda"):
-        dist_print("nf4", rank0_only=True)
-        with torch.device("cuda"):
-            nf4_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="nf4")
-        print_tensor("nf4_linear", nf4_linear.linear.weight, rank0_only=True)
-        # print_params(nf4_linear, rank0_only=True)
-        # print()
-        # print("bnb")
-        dist_print("bnb", rank0_only=True)
-        original_weight = nf4_linear.linear.weight.get_original_weight().clone().detach()
-        print_tensor("original_weight", original_weight, rank0_only=True)
-        with torch.device("cuda"):
-            bnb_linear = LoRALinear(in_dim=dim, out_dim=dim, rank=rank, alpha=alpha, quant_type="bnb", **quantization_kwargs)
-        new_weight = bnb.nn.Params4bit(data=original_weight, **quantization_kwargs)
-        bnb_linear.linear.weight = new_weight
-        bnb_linear.to("cuda")
-        #print_params(bnb_linear, rank0_only=True)
-        print_tensor("bnb_linear", bnb_linear.linear.weight, rank0_only=True)
-        # dq = bnb_functional.dequantize_4bit(bnb_linear.linear.weight, bnb_linear.linear.weight.quant_state, quant_type="nf4")
-        # print(dq.shape, dq.dtype, dq.device)
-        # diff = (dq - original_weight).abs().max()
-        # print(f"diff: {diff}")
+        x = torch.randn(1, dim)
+        seq_model = SimpleLinear(dim, NUM_LAYERS)
+        # with torch.device("cuda"):
+        #     for i in range(NUM_LAYERS):
+        #         in_features = dim if i == 0 else 4 * hidden_dim
+        #         out_features = dim if i == NUM_LAYERS - 1 else 4 * hidden_dim
+        #         seq_model.add_module(f"linear{i}", torch.nn.Linear(in_features, out_features, bias=False))
+    
+    with comm_mode:
+        y = seq_model(x)
+        # for module in seq_model.modules():
+        #     if isinstance(module, nn.Linear):
+        #         fully_shard(module)
+        # fully_shard(seq_model)
+        
+        # w: DTensor = seq_model.layers[0].weight
+        # local_w = w.to_local()
+        # full_w = w.full_tensor()
+        if dist.get_rank() == 0:
+            print(f"comm counts: {comm_mode.get_comm_counts()}")
+            print(f"sharding info: {comm_mode.get_sharding_info()}")
+            trace_table = comm_mode.generate_comm_debug_tracing_table(noise_level=3)
+            print(f"comm trace: {trace_table}")
+    
+        # y = seq_model(x)
+        # dist_print(f"y: {type(y)} {y.shape} {y.dtype} {y.device}", rank0_only=True)
+        # dist.barrier()
 
-        dist.barrier()
-        dist_print("fully_shard", rank0_only=True)
-        print_tensor("nf4 original weight", nf4_linear.linear.weight, rank0_only=True)
-        fully_shard(nf4_linear)
-        #print_params(nf4_linear, rank0_only=True)
-        dist_weight: DTensor = nf4_linear.linear.weight
-        #local_nf4_weight = dist_weight.to_local()
-        full_nf4_weight = dist_weight.full_tensor()
-        #print_tensor("nf4 local_nf4_weight", local_nf4_weight, rank0_only=True)
-        print_tensor("nf4 full_nf4_weight", full_nf4_weight, rank0_only=True)
-        print_tensor("nf4 dist_weight", dist_weight, rank0_only=True)
-
-        dist.barrier()
-        dist_print("fully_shard bnb", rank0_only=True)
-        print_tensor("bnb original weight", bnb_linear.linear.weight, rank0_only=True)
-
-        fully_shard(bnb_linear)
-        #print_params(bnb_linear, rank0_only=True)
-        dist_weight: DTensor = bnb_linear.linear.weight
-        local_bnb_weight = dist_weight.to_local()
-        full_bnb_weight = dist_weight.full_tensor()
-        print_tensor("bnb local_bnb_weight", local_bnb_weight, rank0_only=True)
-        print_tensor("bnb full_bnb_weight", full_bnb_weight, rank0_only=True)
-
+        # if dist.get_rank() == 0:
+        #     print(f"comm counts: {comm_mode.get_comm_counts()}")
+        #     print(f"sharding info: {comm_mode.get_sharding_info()}")
+        #     trace_table = comm_mode.generate_comm_debug_tracing_table(noise_level=1)
+        #     print(f"comm trace: {trace_table}")
 
 if __name__ == "__main__":
     with dist_context():
