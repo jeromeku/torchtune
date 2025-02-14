@@ -6,18 +6,18 @@
 
 import sys
 import time
-
 from functools import partial
 from typing import Any, Dict, Optional, Tuple, Union
 from warnings import warn
 
 import torch
-import torchtune.modules.common_utils as common_utils
 from omegaconf import DictConfig, ListConfig
-
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+
+import torchtune.modules.common_utils as common_utils
 from torchtune import config, modules, training, utils
 from torchtune.config._utils import _get_component_from_path
 from torchtune.data import padded_collate_packed
@@ -31,9 +31,7 @@ from torchtune.modules.peft import (
     validate_missing_and_unexpected_for_lora,
 )
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.training import DummyProfiler, PROFILER_KEY
-
-from tqdm import tqdm
+from torchtune.training import PROFILER_KEY, DummyProfiler
 
 log = utils.get_logger("DEBUG")
 
@@ -121,6 +119,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
     """
 
     def __init__(self, cfg: DictConfig) -> None:
+        breakpoint()
         self._device = utils.get_device(device=cfg.device)
         # Reduced precision logic
         self._dtype = training.get_dtype(cfg.dtype, device=self._device)
@@ -249,6 +248,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         Setup the recipe state. This includes recipe state (if resume_from_checkpoint is True),
         model, tokenizer, loss, optimizer, learning rate scheduler, sampler, and dataloader.
         """
+        breakpoint()
         self._metric_logger = config.instantiate(cfg.metric_logger)
 
         # log config with parameter override
@@ -266,6 +266,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         common_utils._use_low_cpu_ram = cfg.get("low_cpu_ram", False)
 
         # set up model
+        breakpoint()
         self._model = self._setup_model(
             cfg_model=cfg.model,
             enable_activation_checkpointing=self._enable_activation_checkpointing,
@@ -278,10 +279,11 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                 else None
             ),
         )
-
+        breakpoint()
         self._tokenizer = config.instantiate(cfg.tokenizer)
         log.info("Tokenizer is initialized from file.")
-
+        
+        breakpoint()
         self._optimizer = self._setup_optimizer(
             cfg_optimizer=cfg.optimizer,
             opt_state_dict=(
@@ -796,6 +798,7 @@ def recipe_main(cfg: DictConfig) -> None:
         - Parameters specified in config (see available configs through ``tune ls``)
         - Overwritten by arguments from the command-line
     """
+    breakpoint()
     config.log_config(recipe_name="LoRAFinetuneRecipeSingleDevice", cfg=cfg)
     recipe = LoRAFinetuneRecipeSingleDevice(cfg=cfg)
     recipe.setup(cfg=cfg)
