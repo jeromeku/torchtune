@@ -249,6 +249,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         model, tokenizer, loss, optimizer, learning rate scheduler, sampler, and dataloader.
         """
         breakpoint()
+        
         self._metric_logger = config.instantiate(cfg.metric_logger)
 
         # log config with parameter override
@@ -266,7 +267,6 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         common_utils._use_low_cpu_ram = cfg.get("low_cpu_ram", False)
 
         # set up model
-        breakpoint()
         self._model = self._setup_model(
             cfg_model=cfg.model,
             enable_activation_checkpointing=self._enable_activation_checkpointing,
@@ -279,11 +279,10 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                 else None
             ),
         )
-        breakpoint()
+        
         self._tokenizer = config.instantiate(cfg.tokenizer)
         log.info("Tokenizer is initialized from file.")
         
-        breakpoint()
         self._optimizer = self._setup_optimizer(
             cfg_optimizer=cfg.optimizer,
             opt_state_dict=(
@@ -307,6 +306,8 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
         # Dataloader depends on the tokenizer and loss_fn and should be
         # setup after all of these are setup
         collate_name = cfg.get("collate_fn", "torchtune.data.padded_collate_sft")
+
+        breakpoint()
         self._sampler, self._dataloader = self._setup_data(
             cfg_dataset=cfg.dataset,
             shuffle=cfg.shuffle,
@@ -802,6 +803,7 @@ def recipe_main(cfg: DictConfig) -> None:
     config.log_config(recipe_name="LoRAFinetuneRecipeSingleDevice", cfg=cfg)
     recipe = LoRAFinetuneRecipeSingleDevice(cfg=cfg)
     recipe.setup(cfg=cfg)
+    breakpoint()    
     recipe.train()
     recipe.cleanup()
 

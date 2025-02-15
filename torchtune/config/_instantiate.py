@@ -20,7 +20,6 @@ def _create_component(
     args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
 ) -> Any:
-    breakpoint()
     return _component_(*args, **kwargs)
 
 
