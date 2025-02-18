@@ -9,16 +9,16 @@ import os
 import runpy
 import sys
 import textwrap
-
 from pathlib import Path
 from typing import Optional
 
-import torchtune
-
 from torch.distributed.elastic.multiprocessing.errors import record
-from torch.distributed.run import get_args_parser as get_torchrun_args_parser, run
+from torch.distributed.run import get_args_parser as get_torchrun_args_parser
+from torch.distributed.run import run
+
+import torchtune
 from torchtune._cli.subcommand import Subcommand
-from torchtune._recipe_registry import Config, get_all_recipes, Recipe
+from torchtune._recipe_registry import Config, Recipe, get_all_recipes
 
 ROOT = Path(torchtune.__file__).parent.parent
 
@@ -98,6 +98,7 @@ For a list of all possible recipes, run `tune ls`."""
         # custom recipes are specified as a relative module dot path and need to be
         # run with python -m
         args.module = not is_builtin
+
         run(args)
 
     def _run_single_device(self, args: argparse.Namespace, is_builtin: bool):

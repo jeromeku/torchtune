@@ -279,7 +279,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
                 else None
             ),
         )
-        
+        breakpoint()
         self._tokenizer = config.instantiate(cfg.tokenizer)
         log.info("Tokenizer is initialized from file.")
         
@@ -708,6 +708,7 @@ class LoRAFinetuneRecipeSingleDevice(FTRecipeInterface):
 
                     # Loss is normalized by default so we multiply by the number of tokens
                     # This way we can normalize by the total number of tokens if we're accumulating gradients
+                    breakpoint()
                     current_loss = self._loss_step(batch) * current_num_tokens
                     running_loss += current_loss
                     current_loss.backward()

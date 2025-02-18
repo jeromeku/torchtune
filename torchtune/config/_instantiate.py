@@ -13,6 +13,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from torchtune.config._errors import InstantiationError
 from torchtune.config._utils import _get_component_from_path, _has_component
+from torchtune.utils import dist_breakpoint
 
 
 def _create_component(

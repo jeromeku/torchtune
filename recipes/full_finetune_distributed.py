@@ -4,16 +4,16 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import sys
 import time
-
+from datetime import timedelta
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 from warnings import warn
 
 import torch
 from omegaconf import DictConfig, ListConfig
-
 from torch import nn
 from torch.distributed import (
     destroy_process_group,
@@ -24,20 +24,21 @@ from torch.distributed._tensor import DTensor
 from torch.distributed.tensor.parallel import parallelize_module
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
+
 from torchtune import config, modules, training, utils
 from torchtune.config._utils import _get_component_from_path
 from torchtune.data import padded_collate_packed
 from torchtune.datasets import ConcatDataset
 from torchtune.recipe_interfaces import FTRecipeInterface
-from torchtune.training import DummyProfiler, PROFILER_KEY
+from torchtune.training import PROFILER_KEY, DummyProfiler
 from torchtune.training.activations import apply_selective_activation_checkpointing
 from torchtune.training.checkpointing._checkpoint_client import (
     CheckpointClient,
     TrainingProgress,
 )
 from torchtune.training.lr_schedulers import get_lr
-
-from tqdm import tqdm
+from torchtune.utils import dist_breakpoint
 
 log = utils.get_logger("DEBUG")
 
@@ -140,7 +141,7 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
             offload_ops_to_cpu=self.fsdp_cpu_offload
             or self._enable_async_checkpointing,
         )
-        init_process_group(self.distributed_backend)
+        init_process_group(self.distributed_backend, timeout=timedelta(days=1))
 
         # Initialize distributed variables
         self.world_size, self.rank = utils.get_world_size_and_rank()
@@ -284,6 +285,7 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
         checkpoint_dict = self._checkpoint_client.load_base_checkpoint()
 
         self._compile = cfg.get("compile", False)
+
         self._model = self._setup_model(
             cfg_model=cfg.model,
             enable_activation_checkpointing=self._enable_activation_checkpointing,
@@ -572,23 +574,29 @@ class FullFinetuneRecipeDistributed(FTRecipeInterface):
             training.set_activation_checkpointing(
                 model, auto_wrap_policy={modules.TransformerSelfAttentionLayer}
             )
+        from torch.distributed.tensor.debug import CommDebugMode
 
         # Apply Fully Sharded Data Parallelism to the model
+        
         if self.data_parallel_dim > 1:
-            fsdp_shard_conditions = [
-                partial(
-                    training.get_shard_conditions,
-                    names_to_match=custom_sharded_layers,
-                )
-            ]
-            training.shard_model(
-                model=model,
-                shard_conditions=fsdp_shard_conditions,
-                cpu_offload=fsdp_cpu_offload,
-                reshard_after_forward=reshard_after_forward,
-                dp_mesh=device_mesh["dp"],
-            )
+            with CommDebugMode() as comm_mode:
+                fsdp_shard_conditions = [
+                        partial(
+                        training.get_shard_conditions,
+                        names_to_match=custom_sharded_layers,
+                    )
+                ]
 
+                training.shard_model(
+                    model=model,
+                    shard_conditions=fsdp_shard_conditions,
+                    cpu_offload=fsdp_cpu_offload,
+                    reshard_after_forward=reshard_after_forward,
+                    dp_mesh=device_mesh["dp"],
+                )
+                if torch.distributed.get_rank() == 0:
+                    print(comm_mode.generate_comm_debug_tracing_table(noise_level=1))
+                 
         with training.set_default_dtype(self._dtype), self._device:
             for m in model.modules():
                 # RoPE is not covered in state dict

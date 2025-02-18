@@ -26,11 +26,6 @@ model:
   lora_alpha: 128  # usually alpha=2*rank
   lora_dropout: 0.0
 
-# Tokenizer
-tokenizer:
-  _component_: torchtune.models.llama3.llama3_tokenizer
-  path: ${download_dir}/original/tokenizer.model
-  max_seq_len: null
 
 checkpointer:
   _component_: torchtune.training.FullModelHFCheckpointer
@@ -45,13 +40,19 @@ checkpointer:
 resume_from_checkpoint: False
 save_adapter_weights_only: True
 
+# Tokenizer
+tokenizer:
+  _component_: torchtune.models.llama3.llama3_tokenizer
+  path: ${download_dir}/original/tokenizer.model
+  max_seq_len: null
+#  prompt_template: torchtune.models.llama3
 dataset:
   _component_: torchtune.datasets.chat_dataset
   source: Open-Orca/SlimOrca-Dedup
   conversation_column: conversations
   conversation_style: sharegpt
   split: train
-
+  train_on_input: True
 # Dataset and Sampler
 # dataset:
 #   _component_: torchtune.datasets.chat_dataset

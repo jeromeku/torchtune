@@ -7,7 +7,6 @@
 import argparse
 
 from torchtune._cli.cat import Cat
-
 from torchtune._cli.cp import Copy
 from torchtune._cli.download import Download
 from torchtune._cli.ls import List
@@ -43,6 +42,7 @@ class TuneCLIParser:
 
     def run(self, args: argparse.Namespace) -> None:
         """Execute CLI"""
+        print(args)
         args.func(args)
 
 

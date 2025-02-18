@@ -8,27 +8,27 @@
 import logging
 import os
 from itertools import chain
-from typing import Any, Callable, cast, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import torch
 import torch.distributed as dist
 from torch import nn
-
 from torch.distributed._composable.fsdp import CPUOffloadPolicy, fully_shard
-from torch.distributed._tensor import distribute_tensor, DTensor
+from torch.distributed._tensor import DTensor, distribute_tensor
 from torch.distributed._tensor.placement_types import DTensorSpec, TensorMeta
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
     _init_optim_state,
     get_optimizer_state_dict,
     set_model_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions,
 )
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.modules.module import _IncompatibleKeys
 from torch.optim import Optimizer
 from torchao.dtypes.nf4tensor import NF4Tensor, to_nf4
+
 from torchtune.modules import TransformerDecoder
 from torchtune.modules.attention import MultiHeadAttention
 from torchtune.modules.model_fusion import DeepFusionModel, EarlyFusionModel
@@ -319,8 +319,9 @@ def _gather_nf4_tensor(sharded_param: nn.Parameter) -> nn.Parameter:
     """
     Manually gather NF4Tensor parameter since it does not support all_gather
     """
+    from torchao.dtypes.nf4tensor import NF4Tensor
     mesh = sharded_param.device_mesh
-    nf4_tensor = sharded_param._local_tensor
+    nf4_tensor: NF4Tensor = sharded_param._local_tensor
     quant_params, metadata = nf4_tensor.fsdp_pre_all_gather(mesh)
     full_quant_params = []
     for quant_param in quant_params:
@@ -556,6 +557,7 @@ def shard_model(
     num_layers_sharded = 0
     for n, m in reversed(list(model.named_modules())):
         if any([shard_condition(n, m) for shard_condition in shard_conditions]):
+            print(f"rank{torch.distributed.get_rank()}: Sharding {n}")
             fully_shard(m, **fsdp_kwargs)
             num_layers_sharded += 1
 

@@ -6,7 +6,6 @@
 
 import logging
 import os
-
 import random
 from typing import Optional, Union
 
@@ -14,7 +13,7 @@ import numpy as np
 import torch
 
 from torchtune.training._distributed import _broadcast_tensor
-from torchtune.utils import get_logger, get_world_size_and_rank
+from torchtune.utils import dist_print, get_logger, get_world_size_and_rank
 
 _log: logging.Logger = get_logger()
 
