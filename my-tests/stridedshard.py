@@ -124,9 +124,11 @@ def test_2d_linear():
 def test_fused_qkv():
     world_size = torch.distributed.get_world_size()
     tp_size = world_size
-    dim_per_rank = 2
+    dim_per_rank = 4
     dim = dim_per_rank * world_size
-    qkv = torch.arange(dim * 3).reshape(-1, tp_size)
+    
+    qkv = torch.arange(dim * 3).reshape(-1, dim_per_rank)
+
     qkv_fused = qkv.view(3, -1)
     dist_print(f"qkv_fused: {qkv_fused.tolist()}", rank0_only=True)
     
