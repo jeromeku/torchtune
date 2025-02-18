@@ -121,7 +121,27 @@ def test_2d_linear():
     shard_spec = w_dp_tp._spec
     dist_print(f"shard_spec: {shard_spec}", rank0_only=True)
 
+def test_fused_qkv():
+    world_size = torch.distributed.get_world_size()
+    tp_size = world_size
+    dim_per_rank = 2
+    dim = dim_per_rank * world_size
+    qkv = torch.arange(dim * 3).reshape(-1, tp_size)
+    qkv_fused = qkv.view(3, -1)
+    dist_print(f"qkv_fused: {qkv_fused.tolist()}", rank0_only=True)
+    
+    global_mesh = init_device_mesh(
+        "cpu", (tp_size, ), mesh_dim_names=("tp",)
+    )
+    tp_mesh = global_mesh["tp"]
+    split_factor = 3
+    placements = [_StridedShard(0, split_factor=split_factor)]
+    qkv_tp = distribute_tensor(qkv, global_mesh, placements)
+    qkv_local = qkv_tp.to_local()
+    dist_print(f"qkv_local: {qkv_local.view(3, -1).tolist()}")
+
 if __name__ == "__main__":
     with dist_context():
        # test_fsdp_tp_meta_compute()
-        test_2d_linear()
+        #test_2d_linear()
+        test_fused_qkv()
