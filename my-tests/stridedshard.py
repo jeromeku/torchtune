@@ -113,6 +113,9 @@ def test_2d_linear():
     parallelize_module(model, device_mesh=tp_mesh, parallelize_plan=parallel_plan)
     for name, param in model.named_parameters():
         dist_print(f"{name}: {type(param)} {param.shape}", rank0_only=True)
+    w: DTensor = model.linear.weight
+    shard_spec = w._spec
+    dist_print(f"shard_spec: {shard_spec}", rank0_only=True)
 
 if __name__ == "__main__":
     with dist_context():
