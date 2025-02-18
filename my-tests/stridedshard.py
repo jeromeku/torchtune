@@ -4,11 +4,19 @@ import warnings
 from contextlib import contextmanager
 
 import torch
+from torch.distributed._composable.fsdp import CPUOffloadPolicy, fully_shard
+from torch.distributed._tensor import Replicate
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.tensor import DTensor, distribute_tensor
 from torch.distributed.tensor._utils import (  # compute_local_shape,
     compute_local_shape_and_global_offset,
 )
+from torch.distributed.tensor.parallel import (
+    ColwiseParallel,
+    RowwiseParallel,
+    parallelize_module,
+)
+from torch.distributed.tensor.parallel.style import ParallelStyle
 
 #from torch.distributed._tensor.debug import CommDebugMode
 from torch.distributed.tensor.placement_types import Shard, _StridedShard
@@ -35,7 +43,7 @@ def dist_print(*msg, delay=1, rank0_only=False):
 def dist_context():
     torch.distributed.init_process_group(backend="gloo")
     rank = torch.distributed.get_rank()
-    dist_print(f"rank {rank} initialized with world size {torch.distributed.get_world_size()}")
+    dist_print(f"world size {torch.distributed.get_world_size()}", rank0_only=True)
     yield
     torch.distributed.barrier()
     torch.distributed.destroy_process_group()
@@ -49,7 +57,8 @@ def test_fsdp_tp_meta_compute():
     global_mesh = init_device_mesh(
         "cpu", (dp_size, tp_size), mesh_dim_names=("dp", "tp")
     )
-    
+
+
     t = torch.arange(world_size * 2).reshape(world_size * 2, 1)
     # local shard shape is [2, 2]
     global_tensor_shape = torch.Size([2 * world_size, 1])
@@ -81,6 +90,31 @@ def test_fsdp_tp_meta_compute():
     dp_shard = dp_shard.to_local()
     dist_print(f"local: {local_tensor.view(-1).tolist()} dp_shard: {dp_shard.view(-1).tolist()}")
 
+class Linear(torch.nn.Module):
+    def __init__(self, in_features, out_features, bias=False):
+        super().__init__()
+        self.linear = torch.nn.Linear(in_features, out_features, bias=bias)
+    def forward(self, x):
+        return self.linear(x)
+
+def test_2d_linear():
+    world_size = torch.distributed.get_world_size()
+    tp_size = 4
+    dp_size = world_size // tp_size
+    global_mesh = init_device_mesh(
+        "cpu", (dp_size, tp_size), mesh_dim_names=("dp", "tp")
+    )
+    tp_mesh = global_mesh["tp"]
+    dp_mesh = global_mesh["dp"]
+    model = Linear(1, world_size * 2, bias=False)
+    parallel_plan = {
+        "linear*": ColwiseParallel()
+    }
+    parallelize_module(model, device_mesh=tp_mesh, parallelize_plan=parallel_plan)
+    for name, param in model.named_parameters():
+        dist_print(f"{name}: {type(param)} {param.shape}", rank0_only=True)
+
 if __name__ == "__main__":
     with dist_context():
-        test_fsdp_tp_meta_compute()
+       # test_fsdp_tp_meta_compute()
+        test_2d_linear()
