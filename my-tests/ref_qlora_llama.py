@@ -1,17 +1,32 @@
 import os
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).parent.parent
+
+HF_HOME = ROOT_DIR / "hf_cache"
+assert HF_HOME.exists()
 
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,"\
     "roundup_power2_divisions:[32:256,64:128,256:64,>:32]"
+os.environ["HF_HOME"] = str(HF_HOME)
+os.environ["WANDB_PROJECT"] = "qlora-fsdp2"
+RUN_NAME = "hf-qlora-ref"
 
+import datasets.utils.logging as ds_logging
+import torch
+import transformers.utils.logging as tf_logging
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+tf_logging.set_verbosity_debug()
+ds_logging.set_verbosity_debug()
+
 max_seq_length = 2048
 torch.set_default_dtype(torch.float16)
-model_name = "unsloth/meta-Llama-3.1-8B-Instruct-bnb-4bit"
+model_name = "meta-llama/Llama-3.2-1B-Instruct"
 dtype = torch.float16
+
 bnb_config = BitsAndBytesConfig(
     load_in_4bit              = True,
     bnb_4bit_use_double_quant = True,
@@ -26,6 +41,11 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 tokenizer.padding_side = "right"
+# add pad token
+added_vocab = tokenizer.get_added_vocab()
+pad_token = [w for w in added_vocab if 'pad' in w]
+assert len(pad_token) == 1
+tokenizer.pad_token = pad_token[0]
 
 lora_config = LoraConfig(
     r = 64,
@@ -68,8 +88,9 @@ trainer = SFTTrainer(
         max_seq_length = max_seq_length,
         fp16 = model.get_input_embeddings().weight.dtype == torch.float16,
         bf16 = model.get_input_embeddings().weight.dtype == torch.bfloat16,
-        report_to = "none", # For W&B
+        report_to = "wandb", # For W&B
         dataset_num_proc = 4,
+        run_name = RUN_NAME,
     ),
 )
 trainer.train()
