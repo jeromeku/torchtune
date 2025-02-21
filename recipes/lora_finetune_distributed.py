@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import sys
 import time
 from functools import partial
@@ -284,10 +285,19 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         if torch.distributed.get_rank() == 0:
             print(self._model)
         
+        checkpoint_path = os.path.join(self._output_dir, "checkpoint")
+        if torch.distributed.get_rank() == 0:
+            print(f"Saving checkpoint to {checkpoint_path}", flush=True)
+        
+        fs_storage_writer = torch.distributed.checkpoint.FileSystemWriter(checkpoint_path)
+        torch.distributed.checkpoint.save(
+            state_dict=self._model.state_dict(),
+            storage_writer=fs_storage_writer,
+        ) 
         torch.distributed.barrier()
         torch.distributed.destroy_process_group()
         sys.exit()
-        
+
         self._tokenizer = config.instantiate(cfg.tokenizer)
 
         self._optimizer = self._setup_optimizer(
