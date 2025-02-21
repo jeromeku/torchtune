@@ -8,27 +8,27 @@
 import logging
 import os
 from itertools import chain
-from typing import Any, Callable, cast, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import torch
 import torch.distributed as dist
 from torch import nn
-
 from torch.distributed._composable.fsdp import CPUOffloadPolicy, fully_shard
-from torch.distributed._tensor import distribute_tensor, DTensor
+from torch.distributed._tensor import DTensor, distribute_tensor
 from torch.distributed._tensor.placement_types import DTensorSpec, TensorMeta
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
     _init_optim_state,
     get_optimizer_state_dict,
     set_model_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions,
 )
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.fsdp import ShardingStrategy
 from torch.nn.modules.module import _IncompatibleKeys
 from torch.optim import Optimizer
 from torchao.dtypes.nf4tensor import NF4Tensor, to_nf4
+
 from torchtune.modules import TransformerDecoder
 from torchtune.modules.attention import MultiHeadAttention
 from torchtune.modules.model_fusion import DeepFusionModel, EarlyFusionModel
@@ -229,6 +229,7 @@ def load_from_full_model_state_dict(
     # - Relative optimizations for improved memory performance
     # Please keep the version check `_DISTRIBUTED_STATE_DICT_API_IS_AVAILABLE` until these changes are
     # released in the PyTorch stable version.
+    rank = torch.distributed.get_rank()
     has_nf4 = any(
         hasattr(param, "_local_tensor") and isinstance(param._local_tensor, NF4Tensor)
         for param in model.parameters()
@@ -252,8 +253,13 @@ def load_from_full_model_state_dict(
     else:
         sharded_sd = {}
         for param_name, full_tensor in full_sd.items():
-            sharded_meta_param = meta_sharded_sd.get(param_name)
+            sharded_meta_param = meta_sharded_sd.get(param_name, None)
+            if sharded_meta_param is None:
+                if rank == 0:
+                    print(f"Param {param_name} not found in meta_sharded_sd")
+                continue
             full_tensor = full_tensor.to(sharded_meta_param.dtype).to(device)
+
             if hasattr(sharded_meta_param, "_local_tensor") and isinstance(
                 sharded_meta_param._local_tensor, NF4Tensor
             ):
@@ -297,8 +303,7 @@ def load_from_full_model_state_dict(
                         ),
                     ),
                     requires_grad=sharded_meta_param.requires_grad,
-                )
-
+                )            
             elif not hasattr(sharded_meta_param, "device_mesh"):
                 # In cases where parts of the model aren't sharded, some parameters will be plain tensors
                 sharded_tensor = full_tensor
@@ -308,8 +313,10 @@ def load_from_full_model_state_dict(
                     sharded_meta_param.device_mesh,
                     sharded_meta_param.placements,
                 )
+
             if cpu_offload:
                 sharded_tensor = sharded_tensor.cpu()
+
             sharded_sd[param_name] = nn.Parameter(sharded_tensor)
         # choose `assign=True` since we cannot call `copy_` on meta tensor
         return model.load_state_dict(sharded_sd, strict=strict, assign=True)

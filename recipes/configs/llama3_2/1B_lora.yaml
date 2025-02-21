@@ -33,7 +33,8 @@ model:
   lora_rank: 64  # higher increases accuracy and memory
   lora_alpha: 128  # usually alpha=2*rank
   lora_dropout: 0.0
-
+  quantize_base: True
+  
 checkpointer:
   _component_: torchtune.training.FullModelHFCheckpointer
   checkpoint_dir: /tmp/Llama-3.2-1B-Instruct/
