@@ -11,34 +11,45 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,"\
     "roundup_power2_divisions:[32:256,64:128,256:64,>:32]"
 os.environ["HF_HOME"] = str(HF_HOME)
 os.environ["WANDB_PROJECT"] = "qlora-fsdp2"
-RUN_NAME = "hf-qlora-ref"
 
 import datasets.utils.logging as ds_logging
 import torch
 import transformers.utils.logging as tf_logging
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-tf_logging.set_verbosity_debug()
-ds_logging.set_verbosity_debug()
+USE_QLORA = False
+RUN_NAME = "hf-qlora-ref" if USE_QLORA else "hf-lora-ref"
+
+# tf_logging.set_verbosity_debug()
+# ds_logging.set_verbosity_debug()
 
 max_seq_length = 2048
-torch.set_default_dtype(torch.float16)
+torch.set_default_dtype(torch.bfloat16)
 model_name = "meta-llama/Llama-3.2-1B-Instruct"
-dtype = torch.float16
+dtype = torch.bfloat16
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit              = True,
-    bnb_4bit_use_double_quant = True,
-    bnb_4bit_quant_type       = "nf4",
-    bnb_4bit_compute_dtype    = dtype,
-)
+if USE_QLORA:
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit              = True,
+        bnb_4bit_use_double_quant = True,
+        bnb_4bit_quant_type       = "nf4",
+        bnb_4bit_compute_dtype    = dtype,
+    )
+else:
+    bnb_config = None
+
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map = "auto",
     attn_implementation = "sdpa",
     quantization_config = bnb_config,
+    torch_dtype = dtype,
 )
+
+model.model.layers = model.model.layers[:1]
+model.config.num_hidden_layers = 1
+
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 tokenizer.padding_side = "right"
 # add pad token
@@ -57,21 +68,36 @@ lora_config = LoraConfig(
     task_type = TaskType.CAUSAL_LM,
 )
 
-# Get LoRA and setup model
-model = get_peft_model(model, lora_config)
-with torch.no_grad():
-    for name, param in model.named_parameters():
-        if ".lora_A." in name or ".lora_B." in name: param.requires_grad_(True)
-        else: param.requires_grad_(False)
-model.gradient_checkpointing_enable()
-model.enable_input_require_grads()
+# for name, param in model.named_parameters():
+#     print(f"{name} {type(param)} {param.dtype} {param.requires_grad}")
 
-# Get dataset
+# print(" ---------------- ")
+# Get LoRA and setup model
+
+# model = get_peft_model(model, lora_config)
+# for name, param in model.named_parameters():
+#     print(f"{name} {type(param)} {param.requires_grad}")
+# breakpoint()
+#model = prepare_model_for_kbit_training(model)  
+
+# with torch.no_grad():
+#     for name, param in model.named_parameters():
+#         if ".lora_A." in name or ".lora_B." in name: assert param.requires_grad
+#         else: assert not param.requires_grad
+
+# model.gradient_checkpointing_enable()
+# model.enable_input_require_grads()
+
+#print(model)
+# for name, param in model.named_parameters():
+#     print(f"{name} {type(param)} {param.dtype} {param.requires_grad}")
+# # Get dataset
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-url = "https://huggingface.co/datasets/laion/OIG/resolve/main/unified_chip2.jsonl"
-dataset = load_dataset("json", data_files = {"train" : url}, split = "train[:10%]")
+# url = "https://huggingface.co/datasets/laion/OIG/resolve/main/unified_chip2.jsonl"
+# dataset = load_dataset("json", data_files = {"train" : url}, split = "train[:10%]")
+dataset = load_dataset("philschmid/dolly-15k-oai-style", split="train", cache_dir=HF_HOME)
 
 trainer = SFTTrainer(
     model = model,
@@ -93,4 +119,5 @@ trainer = SFTTrainer(
         run_name = RUN_NAME,
     ),
 )
-trainer.train()
+breakpoint()
+#trainer.train()
