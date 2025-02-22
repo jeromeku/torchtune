@@ -1,7 +1,15 @@
 import torch
+from torch._ops import OpOverload
 from torch.utils._python_dispatch import (
     TorchDispatchMode,
     _get_current_dispatch_mode_stack,
+)
+from torchao.dtypes.nf4tensor import (
+    _INNER_TENSOR_NAMES_FOR_SHARDING,
+    _NF4_QUANT_PROPS,
+    NF4Tensor,
+    print_tensor_metadata,
+    to_nf4,
 )
 
 
@@ -14,25 +22,26 @@ class TorchDispatchNestedMode(TorchDispatchMode):
 
 
 class TorchDispatchLoggingMode(TorchDispatchMode):
-    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+    def __torch_dispatch__(cls, func: OpOverload, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
-        arg_shape = (
-            args[0].shape
-            if len(args) > 0 and isinstance(args[0], torch.Tensor)
-            else None
-        )
-        print(f"current dispatch mode stack: {_get_current_dispatch_mode_stack()}")
-        print(
-            f"ATEN_FUNC {func=}, {types=}, {[type(arg) for arg in args]}, {kwargs=}, args[0] shape: {arg_shape}"
-            )
 
+        print(
+            "-------------------------------- TORCH DISPATCH LOGGING MODE --------------------------------"
+        )
+
+        print(f"{func.name}, {types=}, args={[type(arg) for arg in args]}, {kwargs=}")
+
+        for arg in args:
+            if isinstance(arg, NF4Tensor):
+                print_tensor_metadata(arg)
         return func(*args, **kwargs)
 
+
 model = torch.nn.Linear(64, 128, device="cuda", dtype=torch.bfloat16)
-x = torch.randn(10, 64, device="cuda", dtype=torch.bfloat16)
+dim = 512
+x = torch.randn(dim, dim, device="cuda", dtype=torch.bfloat16)
+nf4_weight: NF4Tensor = to_nf4(x)
 
 with TorchDispatchLoggingMode():
-    with TorchDispatchNestedMode():
-        model(x)
-    
+    chunks = nf4_weight.chunk(2)
