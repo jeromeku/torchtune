@@ -6,6 +6,7 @@
 
 import inspect
 import logging
+import os
 import warnings
 from functools import lru_cache, wraps
 from typing import Callable, Optional, TypeVar
@@ -15,8 +16,9 @@ from torch import distributed as dist
 T = TypeVar("T", bound=type)
 
 FORMATTER = logging.Formatter(
-    '%(asctime)s::%(name)s::%(levelname)s - %(pathname)s:%(lineno)d : %(message)s'
+    "%(name)s::%(levelname)s %(pathname)s:%(lineno)d - %(message)s"
 )
+
 
 def get_logger(level: Optional[str] = None) -> logging.Logger:
     """
@@ -33,16 +35,30 @@ def get_logger(level: Optional[str] = None) -> logging.Logger:
     Returns:
         logging.Logger: The logger.
     """
-    logger = logging.getLogger(__name__)
+     # Get the frame one level up (i.e., the caller)
+    frame = inspect.stack()[1]
+    module = inspect.getmodule(frame[0])
     
-    if not logger.hasHandlers():
+    # Use the module's __file__ or fallback to filename
+    if module and hasattr(module, "__file__"):
+        name = os.path.relpath(module.__file__)
+    else:
+        name = os.path.basename(frame.filename)
+
+    # Normalize logger name
+    logger_name = name.replace(os.sep, ".").rsplit(".", 1)[0]  # remove .py
+    logger = logging.getLogger(logger_name)
+
+    if len(logger.handlers) == 0:
         handler = logging.StreamHandler()
         handler.setFormatter(FORMATTER)
-        logger.addHandler(logging.StreamHandler())
-    
+        logger.addHandler(handler)
+        logger.propagate = False
+        
     if level is not None:
         level = getattr(logging, level.upper())
         logger.setLevel(level)
+
     return logger
 
 
