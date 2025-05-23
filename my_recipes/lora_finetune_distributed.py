@@ -170,8 +170,21 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             )
             self._log_peak_memory_stats = False
 
-        self._debug = cfg.get("debug", False)
-        self._logger.info(f"Running with debug={self._debug}")
+        breakpoint()
+        self._debug_cfg = cfg.get("debug", None)
+        self._logger.info(f"Running with debug config: {self._debug_cfg}")
+
+        self._should_save = self._debug_cfg.get("skip_checkpoint", False)
+        trace_cfg = self._debug_cfg.get("trace", None)        
+        
+        if trace_cfg is not None:
+            from omegaconf import OmegaConf
+            OmegaConf.resolve(trace_cfg)
+            self._should_trace = trace_cfg.pop("enabled", False)
+            if self._should_trace:
+                from torchtune.utils.trace import create_tracer
+                self._logger.info(f"Initializing tracer with {trace_cfg}")
+                self.tracer = create_tracer(**trace_cfg)
 
         self._enable_async_checkpointing = cfg.get("enable_async_checkpointing", False)
         self._checkpoint_client = CheckpointClient(cfg)
@@ -803,7 +816,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
 
             self.epochs_run += 1
 
-            if not self._debug:
+            if not self._should_save:
                 start_save_checkpoint = time.perf_counter()
                 self._logger.info("Starting checkpoint save...")
                 self.save_checkpoint(epoch=curr_epoch)
@@ -910,9 +923,9 @@ def recipe_main(cfg: DictConfig) -> None:
     config.log_config(recipe_name="LoRAFinetuneRecipeDistributed", cfg=cfg)
 
     recipe = LoRAFinetuneRecipeDistributed(cfg=cfg)
-    recipe.setup(cfg=cfg)
-    recipe.train()
-    recipe.cleanup()
+    # recipe.setup(cfg=cfg)
+    # recipe.train()
+    # recipe.cleanup()
 
 
 if __name__ == "__main__":

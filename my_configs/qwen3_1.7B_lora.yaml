@@ -91,7 +91,16 @@ log_level: DEBUG  # DEBUG, WARN, etc.
 
 debug: 
   skip_checkpoint: True
-  trace: False
+  trace: 
+    enabled: False
+    ignore_frozen: True
+    ignore_c_function: True
+    log_func_args: True
+    log_func_retval: True
+    log_torch: False
+    dump_raw: False
+    output_file: "${output_dir}/trace.json"
+
 
 # Profiler (disabled)
 profiler:

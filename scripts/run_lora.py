@@ -16,8 +16,8 @@ def main(args):
 
     print(f"{cmd.strip()}")
     
-    # with patch.object(sys, "argv", cmd.split()):
-    #     runpy.run_path(TUNE_PATH, run_name="__main__")
+    with patch.object(sys, "argv", cmd.split()):
+        runpy.run_path(TUNE_PATH, run_name="__main__")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

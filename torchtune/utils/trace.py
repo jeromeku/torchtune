@@ -27,7 +27,7 @@ def _get_trace_config(
     return tracer_kwargs
 
 
-def get_tracer(
+def create_tracer(
     include_files=None,
     ignore_frozen=True,
     ignore_c_function=True,
@@ -49,6 +49,7 @@ def get_tracer(
         output_file=output_file,
         **kwargs
     )
+    return tracer
 
 def configure_tracer(tracer: VizTracer = None, **kwargs):
     if tracer is None:
