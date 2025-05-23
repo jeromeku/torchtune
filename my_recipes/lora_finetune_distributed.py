@@ -1,11 +1,7 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
+import os
 import sys
 import time
+from contextlib import nullcontext
 from functools import partial
 from typing import Any, Optional, Union
 from warnings import warn
@@ -19,7 +15,6 @@ from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from torchdata.stateful_dataloader.sampler import StatefulDistributedSampler
 from tqdm import tqdm
-from viztracer import VizTracer
 
 from torchtune import config, modules, training, utils
 from torchtune.config._utils import _get_component_from_path
@@ -175,7 +170,7 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
         self._logger.info(f"Running with debug config: {self._debug_cfg}")
 
         self._should_save = self._debug_cfg.get("skip_checkpoint", False)
-        trace_cfg = self._debug_cfg.get("trace", None)        
+        trace_cfg: DictConfig = self._debug_cfg.get("trace", None)        
         
         if trace_cfg is not None:
             from omegaconf import OmegaConf
@@ -183,8 +178,21 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
             self._should_trace = trace_cfg.pop("enabled", False)
             if self._should_trace:
                 from torchtune.utils.trace import create_tracer
-                self._logger.info(f"Initializing tracer with {trace_cfg}")
-                self.tracer = create_tracer(**trace_cfg)
+                trace_dir = trace_cfg.pop("output_dir", None)
+                
+                if trace_dir is None:
+                    trace_dir = os.path.join(self._output_dir, "traces")
+                
+                os.makedirs(trace_dir, exist_ok=True)
+                
+                self._logger.info(f"Initializing tracer with {trace_cfg}\n")
+                
+                output_file = os.path.join(trace_dir, "trace.json")
+                trace_cfg.output_file = output_file
+
+                self.tracing_context = create_tracer(**trace_cfg)
+            else:
+                self.tracing_context = nullcontext()
 
         self._enable_async_checkpointing = cfg.get("enable_async_checkpointing", False)
         self._checkpoint_client = CheckpointClient(cfg)
@@ -300,117 +308,125 @@ class LoRAFinetuneRecipeDistributed(FTRecipeInterface):
 
         self._compile = cfg.get("compile", False)
 
-        self._model = self._setup_model(
-            cfg_model=cfg.model,
-            enable_activation_checkpointing=self._enable_activation_checkpointing,
-            enable_activation_offloading=self._enable_activation_offloading,
-            custom_sharded_layers=cfg.get("custom_sharded_layers", None),
-            fsdp_cpu_offload=cfg.get("fsdp_cpu_offload", False),
-            reshard_after_forward=cfg.get("fsdp_reshard_after_forward", True),
-            base_model_state_dict=checkpoint_dict[training.MODEL_KEY],
-            lora_weights_state_dict=(
-                checkpoint_dict[training.ADAPTER_KEY]
-                if training.ADAPTER_KEY in checkpoint_dict
-                else None
-            ),
-        )
-        self._tokenizer = config.instantiate(cfg.tokenizer)
-
-        self._optimizer = self._setup_optimizer(
-            cfg_optimizer=cfg.optimizer,
-            opt_state_dict=(
-                checkpoint_dict[training.OPT_KEY]
-                if training.OPT_KEY in checkpoint_dict
-                else None
-            ),
-        )
-
-        if self._resume_from_checkpoint:
-            # If async checkpointing is enabled, intermediate checkpoints are saved asynchronously
-            # using the DistributedCheckpointer.
-            # Therefore the recipe needs to load the distributed checkpoint to restore the training
-            # progress.
-            if self._enable_async_checkpointing:
-                try:
-                    checkpoint_dict = (
-                        self._checkpoint_client.load_distributed_checkpoint(
-                            self._model,
-                            self._optimizer,
-                            self._adapter_config,
-                        )
-                    )
-                except Exception as e:
-                    self._logger.warning(
-                        f"Failed to load distributed checkpoint: {e}. Training will start from the base checkpoint."
-                    )
-
-            if training.ADAPTER_KEY not in checkpoint_dict:
-                raise ValueError(
-                    "Adapter weights not found. Please ensure a valid adapter checkpoint is provided."
-                )
-
-            # Update the recipe state from the checkpoint state dict.
-            self._update_recipe_state(checkpoint_dict)
-
-        # initialize loss
-        self._loss_fn = config.instantiate(cfg.loss)
-        if isinstance(self._loss_fn, SFTLoss):
-            self._loss_fn.set_model_output(self._model)
-
-        if self._compile:
-            training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
-
-        utils.log_rank_zero(self._logger, "Loss is initialized.")
-
-        # sampler and dataloader depend on the tokenizer and loss_fn and should be
-        # setup after all of these are setup
-        collate_name = cfg.get("collate_fn", "torchtune.data.padded_collate_sft")
-        self._dataloader = self._setup_data(
-            cfg_dataset=cfg.dataset,
-            shuffle=cfg.shuffle,
-            batch_size=cfg.batch_size,
-            collate_fn=collate_name,
-        )
-
-        # Setup validation dataloader if validation dataset is provided
-        self._val_dataloader = None
-        if cfg.get("dataset_val") is not None:
-            batch_size_val = cfg.get("batch_size_val", cfg.batch_size)
-            self._val_dataloader = self._setup_data(
-                cfg_dataset=cfg.dataset_val,
-                batch_size=batch_size_val,
-                collate_fn=collate_name,
-                shuffle=False,
+        if self._should_trace:
+            with self.tracing_context:
+                print("Tracing test...", flush=True)
+            
+            self.tracing_context.output_file = os.path.join(self._output_dir, "traces/model_setup.json")
+        
+        with self.tracing_context:
+            self._model = self._setup_model(
+                cfg_model=cfg.model,
+                enable_activation_checkpointing=self._enable_activation_checkpointing,
+                enable_activation_offloading=self._enable_activation_offloading,
+                custom_sharded_layers=cfg.get("custom_sharded_layers", None),
+                fsdp_cpu_offload=cfg.get("fsdp_cpu_offload", False),
+                reshard_after_forward=cfg.get("fsdp_reshard_after_forward", True),
+                base_model_state_dict=checkpoint_dict[training.MODEL_KEY],
+                lora_weights_state_dict=(
+                    checkpoint_dict[training.ADAPTER_KEY]
+                    if training.ADAPTER_KEY in checkpoint_dict
+                    else None
+                ),
             )
 
-        # Finally update the recipe state which can only be correctly set after all of the
-        # other components have been initialized and updated.
+        # self._tokenizer = config.instantiate(cfg.tokenizer)
 
-        # Number of training steps in each epoch depends on the number of batches produced
-        # by the dataloader and the max_steps_per_epoch param set by the user and is used
-        # for logging and tracking training state. This should be computed after the dataloader
-        # has been setup
-        self._steps_per_epoch = (
-            len(self._dataloader) // self._gradient_accumulation_steps
-        )
-        if (
-            self.max_steps_per_epoch is not None
-            and self.max_steps_per_epoch < self._steps_per_epoch
-        ):
-            self._steps_per_epoch = self.max_steps_per_epoch
-        self.global_step = self.epochs_run * self._steps_per_epoch
+        # self._optimizer = self._setup_optimizer(
+        #     cfg_optimizer=cfg.optimizer,
+        #     opt_state_dict=(
+        #         checkpoint_dict[training.OPT_KEY]
+        #         if training.OPT_KEY in checkpoint_dict
+        #         else None
+        #     ),
+        # )
 
-        # Learning rate scheduler can only be set up after number of steps
-        # has been computed
-        self._lr_scheduler = self._setup_lr_scheduler(
-            cfg_lr_scheduler=cfg.lr_scheduler,
-            num_training_steps=self.total_epochs * self._steps_per_epoch,
-            last_epoch=self.global_step - 1,
-        )
+        # if self._resume_from_checkpoint:
+        #     # If async checkpointing is enabled, intermediate checkpoints are saved asynchronously
+        #     # using the DistributedCheckpointer.
+        #     # Therefore the recipe needs to load the distributed checkpoint to restore the training
+        #     # progress.
+        #     if self._enable_async_checkpointing:
+        #         try:
+        #             checkpoint_dict = (
+        #                 self._checkpoint_client.load_distributed_checkpoint(
+        #                     self._model,
+        #                     self._optimizer,
+        #                     self._adapter_config,
+        #                 )
+        #             )
+        #         except Exception as e:
+        #             self._logger.warning(
+        #                 f"Failed to load distributed checkpoint: {e}. Training will start from the base checkpoint."
+        #             )
 
-        # Set up profiler, returns DummyProfiler (nullcontext object with no-op `step` method)
-        # if cfg is missing profiler key or if `cfg.profiler.enabled = False`
-        self._profiler = self._setup_profiler(cfg.get(PROFILER_KEY, None))
+        #     if training.ADAPTER_KEY not in checkpoint_dict:
+        #         raise ValueError(
+        #             "Adapter weights not found. Please ensure a valid adapter checkpoint is provided."
+        #         )
+
+        #     # Update the recipe state from the checkpoint state dict.
+        #     self._update_recipe_state(checkpoint_dict)
+
+        # # initialize loss
+        # self._loss_fn = config.instantiate(cfg.loss)
+        # if isinstance(self._loss_fn, SFTLoss):
+        #     self._loss_fn.set_model_output(self._model)
+
+        # if self._compile:
+        #     training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
+
+        # utils.log_rank_zero(self._logger, "Loss is initialized.")
+
+        # # sampler and dataloader depend on the tokenizer and loss_fn and should be
+        # # setup after all of these are setup
+        # collate_name = cfg.get("collate_fn", "torchtune.data.padded_collate_sft")
+        # self._dataloader = self._setup_data(
+        #     cfg_dataset=cfg.dataset,
+        #     shuffle=cfg.shuffle,
+        #     batch_size=cfg.batch_size,
+        #     collate_fn=collate_name,
+        # )
+
+        # # Setup validation dataloader if validation dataset is provided
+        # self._val_dataloader = None
+        # if cfg.get("dataset_val") is not None:
+        #     batch_size_val = cfg.get("batch_size_val", cfg.batch_size)
+        #     self._val_dataloader = self._setup_data(
+        #         cfg_dataset=cfg.dataset_val,
+        #         batch_size=batch_size_val,
+        #         collate_fn=collate_name,
+        #         shuffle=False,
+        #     )
+
+        # # Finally update the recipe state which can only be correctly set after all of the
+        # # other components have been initialized and updated.
+
+        # # Number of training steps in each epoch depends on the number of batches produced
+        # # by the dataloader and the max_steps_per_epoch param set by the user and is used
+        # # for logging and tracking training state. This should be computed after the dataloader
+        # # has been setup
+        # self._steps_per_epoch = (
+        #     len(self._dataloader) // self._gradient_accumulation_steps
+        # )
+        # if (
+        #     self.max_steps_per_epoch is not None
+        #     and self.max_steps_per_epoch < self._steps_per_epoch
+        # ):
+        #     self._steps_per_epoch = self.max_steps_per_epoch
+        # self.global_step = self.epochs_run * self._steps_per_epoch
+
+        # # Learning rate scheduler can only be set up after number of steps
+        # # has been computed
+        # self._lr_scheduler = self._setup_lr_scheduler(
+        #     cfg_lr_scheduler=cfg.lr_scheduler,
+        #     num_training_steps=self.total_epochs * self._steps_per_epoch,
+        #     last_epoch=self.global_step - 1,
+        # )
+
+        # # Set up profiler, returns DummyProfiler (nullcontext object with no-op `step` method)
+        # # if cfg is missing profiler key or if `cfg.profiler.enabled = False`
+        # self._profiler = self._setup_profiler(cfg.get(PROFILER_KEY, None))
 
     def _setup_profiler(
         self, cfg_profiler: Optional[DictConfig] = None
@@ -923,7 +939,7 @@ def recipe_main(cfg: DictConfig) -> None:
     config.log_config(recipe_name="LoRAFinetuneRecipeDistributed", cfg=cfg)
 
     recipe = LoRAFinetuneRecipeDistributed(cfg=cfg)
-    # recipe.setup(cfg=cfg)
+    recipe.setup(cfg=cfg)
     # recipe.train()
     # recipe.cleanup()
 

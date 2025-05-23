@@ -35,7 +35,6 @@ def create_tracer(
     log_torch=False,
     log_func_retval=True,
     dump_raw=False,
-    output_file=None,
     **kwargs,
 ):
     tracer = VizTracer(
@@ -46,7 +45,6 @@ def create_tracer(
         log_func_retval=log_func_retval,
         log_torch=log_torch,
         dump_raw=dump_raw,
-        output_file=output_file,
         **kwargs
     )
     return tracer

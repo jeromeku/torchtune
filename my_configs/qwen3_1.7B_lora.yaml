@@ -91,16 +91,21 @@ log_level: DEBUG  # DEBUG, WARN, etc.
 
 debug: 
   skip_checkpoint: True
+
   trace: 
+    # general kwargs
     enabled: False
+    output_dir: ${output_dir}/traces
+
+    # kwargs to be passed to viztracer
     ignore_frozen: True
     ignore_c_function: True
     log_func_args: True
     log_func_retval: True
     log_torch: False
     dump_raw: False
-    output_file: "${output_dir}/trace.json"
-
+    pid_suffix: True
+    include_files: ["torchtune", "my_recipes"]
 
 # Profiler (disabled)
 profiler:
