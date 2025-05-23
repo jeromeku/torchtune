@@ -9,14 +9,18 @@ from typing import Any, Callable, Literal, Optional, TypeVar, Union
 from urllib import request
 
 import torch
-import torchvision
+
+try:
+    import torchvision
+except:
+    torchvision = object()
+    
 from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
-from torch.utils.data import default_collate, DistributedSampler
+from torch.utils.data import DistributedSampler, default_collate
 
 from torchtune.data._torchdata import DatasetType, Loader, requires_torchdata
 from torchtune.modules.transforms import Transform
-
 from torchtune.utils import get_world_size_and_rank
 
 T = TypeVar("T", bound=type)

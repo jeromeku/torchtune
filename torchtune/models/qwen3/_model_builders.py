@@ -3,10 +3,10 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
+from functools import partial
 from typing import List, Optional
 
 from torchtune.data._prompt_templates import _get_prompt_template, _TemplateType
-
 from torchtune.models.qwen2._component_builders import lora_qwen2, qwen2
 from torchtune.models.qwen3._tokenizer import QWEN3_SPECIAL_TOKENS, Qwen3Tokenizer
 from torchtune.modules import TransformerDecoder
@@ -647,6 +647,8 @@ def lora_qwen3_1_7b_instruct(
         quantize_base=quantize_base,
     )
 
+qlora_qwen3_1_7b_instruct = partial(lora_qwen3_1_7b_instruct, quantize_base=True)
+qlora_qwen3_1_7b_instruct.__doc__ = """Model builder for qlora qwen3 1.7b"""
 
 def lora_qwen3_4b_base(
     lora_attn_modules: List[LORA_ATTN_MODULES],

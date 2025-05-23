@@ -14,6 +14,9 @@ from torch import distributed as dist
 
 T = TypeVar("T", bound=type)
 
+FORMATTER = logging.Formatter(
+    '%(asctime)s::%(name)s::%(levelname)s - %(pathname)s:%(lineno)d : %(message)s'
+)
 
 def get_logger(level: Optional[str] = None) -> logging.Logger:
     """
@@ -31,8 +34,12 @@ def get_logger(level: Optional[str] = None) -> logging.Logger:
         logging.Logger: The logger.
     """
     logger = logging.getLogger(__name__)
+    
     if not logger.hasHandlers():
+        handler = logging.StreamHandler()
+        handler.setFormatter(FORMATTER)
         logger.addHandler(logging.StreamHandler())
+    
     if level is not None:
         level = getattr(logging, level.upper())
         logger.setLevel(level)
