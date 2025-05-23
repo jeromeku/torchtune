@@ -19,6 +19,7 @@ from torch.optim import Optimizer
 from torchdata.stateful_dataloader import StatefulDataLoader
 from torchdata.stateful_dataloader.sampler import StatefulDistributedSampler
 from tqdm import tqdm
+from viztracer import VizTracer
 
 from torchtune import config, modules, training, utils
 from torchtune.config._utils import _get_component_from_path
